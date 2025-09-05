@@ -31,6 +31,7 @@ class Controller:
         self.clientSelection = getattr(clientSelection, client_selector)()
         self.aggregator = create_object("aggregator", aggregator)
         self.metrics = {}
+        self.global_model = None
 
     # getters
     def get_trainer_list(self):
@@ -49,6 +50,9 @@ class Controller:
         mean = float(np.mean(np.array(self.acc_list)))
         self.mean_acc_per_round.append(mean)  # save mean acc
         return mean
+
+    def get_global_model(self):
+        return self.global_model
 
     def update_metrics(self, trainer_id, metrics):
         self.metrics[trainer_id] = metrics
@@ -109,6 +113,8 @@ class Controller:
 
         # reset weights and samples for next round
         self.client_training_response.clear()
+
+        self.global_model = agg_response_dict
 
         # agg_response_dict -> {client_id: {"weights": [], ...}}
         return agg_response_dict

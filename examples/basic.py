@@ -37,7 +37,7 @@ def topology():
     for i in range(8):
         clients.append(net.addHost(f'sta{i}', cls=Client, script="client/client.py",
                                    args=client_args, volumes=volumes,
-                                   dimage='mininetfed:client', numeric_id=i))
+                                   dimage='mininetfed:client_tf_cuda', numeric_id=i))
 
     info('*** Connecting to the MininetFed Devices...\n')
     net.connectMininetFedDevices()

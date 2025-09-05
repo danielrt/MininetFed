@@ -252,7 +252,7 @@ class Server (Docker):
         self.experiment = experiment_controller
         self.broker_addr = broker_addr
 
-        cmd = f"""bash -c "python3 {self.script} {self.broker_addr} {self.experiment.getFileName()} 2> {self.experiment.getFileName(extension='''''')}_err.txt """
+        cmd = f"""bash -c "python3 {self.script} {self.broker_addr} {self.experiment.getFileName(extension="")} 2> {self.experiment.getFileName(extension='''''')}_err.txt """
 
         if self.args is not None and len(self.args) != 0:
             json_str = json.dumps(self.args).replace('"', '\\"')
@@ -289,7 +289,7 @@ class ServerSensor (DockerSensor):
     def run(self, broker_addr, experiment_controller):
         self.experiment = experiment_controller
         self.broker_addr = broker_addr
-        cmd = f"""bash -c "python3 {self.script} {self.broker_addr} {self.experiment.getFileName()} 2> {self.experiment.getFileName(extension='''''')}_err.txt """
+        cmd = f"""bash -c "python3 {self.script} {self.broker_addr} {self.experiment.getFileName(extension="")} 2> {self.experiment.getFileName(extension='''''')}_err.txt """
 
         if self.args is not None and len(self.args) != 0:
             json_str = json.dumps(self.args).replace('"', '\\"')

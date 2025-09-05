@@ -5,6 +5,8 @@ import numpy as np
 import json
 import time
 import sys
+import traceback
+import time
 try:
     import torch
 except:
@@ -116,12 +118,24 @@ def on_message_selection(client, userdata, message):
             print(color.BOLD_START + '[{}] new round starting'.format(n_round[client_id]) + color.BOLD_END)
             print(
                 f'trainer was selected for training this round and will start training!')
-            trainer.train_model()
 
-            resp_dict = {'id': CLIENT_NAME, 'weights': trainer.get_weights(
-            ), 'num_samples': trainer.get_num_samples()}
-            if has_method(trainer, 'get_training_args'):
-                resp_dict['training_args'] = trainer.get_training_args()
+            resp_dict = {'id': CLIENT_NAME, 'success': True }
+
+            t0 = time.perf_counter()
+
+            try:
+                trainer.train_model()
+                resp_dict['weights'] = trainer.get_weights()
+                resp_dict['num_samples'] = trainer.get_num_samples()
+                if has_method(trainer, 'get_training_args'):
+                    resp_dict['training_args'] = trainer.get_training_args()
+            except Exception:
+                print(traceback.format_exc())
+                resp_dict['success'] = False
+
+            t_train = (time.perf_counter() - t0) * 1000
+            resp_dict['t_train'] = t_train
+
             response = json.dumps(resp_dict, default=default)
 
             client.publish('minifed/preAggQueue', response)

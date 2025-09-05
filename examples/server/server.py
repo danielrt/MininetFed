@@ -1,3 +1,5 @@
+from logging import Formatter
+
 import paho.mqtt.client as mqtt
 from controller import Controller
 import json
@@ -6,7 +8,6 @@ import numpy as np
 import sys
 import logging
 import os
-
 
 def default(obj):
     if type(obj).__module__ == np.__name__:
@@ -24,9 +25,6 @@ def default(obj):
     raise TypeError('Tipo não pode ser serializado:', type(obj))
 
 
-FORMAT = "%(asctime)s - %(infotype)-6s - %(levelname)s - %(message)s"
-
-
 def server():
     # total args
     os.umask(0o000)
@@ -41,18 +39,38 @@ def server():
 
     server_args = json.loads(sys.argv[3])
     broker_addr = sys.argv[1]
-    log_file = sys.argv[2]
+    log_file = sys.argv[2] + ".log"
+    saved_model_file = sys.argv[2] + "_best.model"
+    spnfl_log_file = sys.argv[2] + "_spnfl.log"
     min_trainers = server_args["min_trainers"]
     client_selector = server_args["client_selector"]
     aggregator = server_args["aggregator"]
     nun_rounds = server_args["num_rounds"]
     stop_acc = server_args["stop_acc"]
     client_args = server_args.get("client")
-    logging.basicConfig(level=logging.INFO, filename=log_file,
-                        format=FORMAT, filemode="w")
     metricType = {"infotype": "METRIC"}
     executionType = {"infotype": "EXECUT"}
+
+    FORMAT = "%(asctime)s - %(infotype)-6s - %(levelname)s - %(message)s"
+    #logging.basicConfig(level=logging.INFO, filename=log_file,
+    #                    format=FORMAT, filemode="w")
+    #logger = logging.getLogger(__name__)
+
+    # logger geral
     logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    h_general = logging.FileHandler(filename=log_file, mode="w")
+    h_general.setFormatter(Formatter(FORMAT))
+    logger.addHandler(h_general)
+
+    # logger spnfl (artigo https://sol.sbc.org.br/index.php/sbrc/article/view/35122/34913)
+    FORMAT_SPNFL = "%(asctime)s - %(message)s"
+    spnfl_logger = logging.getLogger("spnfl")
+    spnfl_logger.setLevel(logging.INFO)
+    spnfl_logger.propagate = False  # não manda para os handlers do "myapp"
+    h_spnfl = logging.FileHandler(spnfl_log_file, mode="w")
+    h_spnfl.setFormatter(Formatter(FORMAT_SPNFL))
+    spnfl_logger.addHandler(h_spnfl)
 
     # class for coloring messages on terminal
     class color:
@@ -76,6 +94,8 @@ def server():
         m = json.loads(message.payload.decode("utf-8"))
         controller.add_trainer(m["id"])
 
+        spnfl_logger.info(f'T_ARRIVAL {m["id"]}')
+
     def on_message_register(client, userdata, message):
         m = json.loads(message.payload.decode("utf-8"))
         controller.update_metrics(m["id"], m['metrics'])
@@ -90,21 +110,31 @@ def server():
     # callback for preAggQueue: get weights of trainers, aggregate and send back
     def on_message_agg(client, userdata, message):
         m = json.loads(message.payload.decode("utf-8"))
-        client_training_response = {}
-        weights = [np.asarray(w, dtype=np.float32) for w in m['weights']]
-        client_training_response["weights"] = weights
 
-        if 'training_args' in m:
-            client_training_response["training_args"] = m['training_args']
+        spnfl_logger.info(f'T_RETURN {m["id"]} {m["id"]} {m["success"]}')
+        spnfl_logger.info(f'T_TRAIN  {m["t_train"]}')
 
-        num_samples = m['num_samples']
-        client_training_response["num_samples"] = num_samples
-        controller.add_client_training_response(
-            m['id'], client_training_response)
-        controller.update_num_responses()
-        logger.info(
-            f'received weights from trainer {m["id"]}!', extra=executionType)
-        print(f'received weights from trainer {m["id"]}!')
+
+        if m['success']:
+            client_training_response = {}
+            weights = [np.asarray(w, dtype=np.float32) for w in m['weights']]
+            client_training_response["weights"] = weights
+
+            if 'training_args' in m:
+                client_training_response["training_args"] = m['training_args']
+
+            num_samples = m['num_samples']
+            client_training_response["num_samples"] = num_samples
+            controller.add_client_training_response(
+                m['id'], client_training_response)
+            controller.update_num_responses()
+            logger.info(
+                f'received weights from trainer {m["id"]}!', extra=executionType)
+            print(f'received weights from trainer {m["id"]}!')
+        else:
+            print(f'client {m["id"]} failed in training!')
+
+
 
     # callback for metricsQueue: get the metrics from each client after it finish its round
     def on_message_metrics(client, userdata, message):
@@ -115,6 +145,8 @@ def server():
         logger.info(
             f'{json.dumps(m["metrics"])}', extra=metricType)
         controller.update_num_responses()
+
+        spnfl_logger.info(f'T_SEND {m["id"]}')
 
     # connect on queue
     controller = Controller(min_trainers=min_trainers, num_rounds=nun_rounds,
@@ -133,9 +165,20 @@ def server():
     print(color.BOLD_START + 'starting server...' + color.BOLD_END)
     client.publish('minifed/autoWaitContinue', json.dumps({'continue': True}))
 
+    spnfl_logger.info("INIT_EXPERIMENT")
+
+    # best accuracy so far
+    best_acc = 0
+    # best model so far
+    best_model = None
+
+    spnfl_logger.info("T_ARRIVAL_START")
+
     # wait trainers to connect
     while controller.get_num_trainers() < min_trainers:
         time.sleep(1)
+
+    spnfl_logger.info(f'T_ARRIVAL_END {min_trainers} {controller.get_num_trainers()}')
 
     # begin training
     selected_qtd = 0
@@ -147,6 +190,9 @@ def server():
             f'round: {controller.get_current_round()}', extra=metricType)
         print(color.RESET + '\n' + color.BOLD_START +
               f'starting round {controller.get_current_round()}' + color.BOLD_END)
+
+        spnfl_logger.info(f'ROUND {controller.get_current_round()}')
+
         # select trainers for round
         trainer_list = controller.get_trainer_list()
         if not trainer_list:
@@ -171,18 +217,36 @@ def server():
                 m = json.dumps({'id': t, 'selected': False}).replace(' ', '')
                 client.publish('minifed/selectionQueue', m)
 
+        spnfl_logger.info(f'T_SELECT {selected_qtd}')
+
+        spnfl_logger.info(f'T_RETURN_START')
+
         # wait for agg responses
         while controller.get_num_responses() != selected_qtd:
             time.sleep(1)
         controller.reset_num_responses()  # reset num_responses for next round
 
+        spnfl_logger.info(f'T_RETURN_END')
+
+        spnfl_logger.info(f'T_AGGREG_START')
+
         # aggregate and send
         agg_response = controller.agg_weights()
         response = json.dumps({'agg_response': agg_response}, default=default)
-        client.publish('minifed/posAggQueue', response)
+
+        spnfl_logger.info(f'T_AGGREG_END')
+
+        spnfl_logger.info(f'T_SEND_START')
+
+        client.publish('minifed/posAggQueue', response) #### T_SEND
+
+        spnfl_logger.info(f'T_SEND_END')
+
         logger.info(f'sent aggregated weights to trainers!',
                     extra=executionType)
         print(f'sent aggregated weights to trainers and waiting trainers metrics!')
+
+        spnfl_logger.info(f'T_COMPUTE_START')
 
         # wait for metrics response
         while controller.get_num_responses() != controller.get_num_trainers():
@@ -206,15 +270,32 @@ def server():
             print(
                 color.BLUE + f"Estimated time remaining until the end of the experiment: {mins}m {secs}s" + color.RESET)
 
+        spnfl_logger.info(f'T_COMPUTE_END')
+
+        spnfl_logger.info(f'T_SAVE_START')
+
+        if mean_acc >= best_acc:
+            best_model = controller.get_global_model()
+            best_acc = mean_acc
+
         # update stop queue or continue process
         if mean_acc >= stop_acc:
+            with open(saved_model_file, "w", encoding="utf-8") as f:
+                json.dump(best_model, f, ensure_ascii=False, indent=2)
+                spnfl_logger.info(f'T_SAVE_END')
+
             logger.info('stop_condition: accuracy', extra=metricType)
             print(color.RED + f'accuracy threshold met! stopping the training!')
             m = json.dumps({'stop': True})
             client.publish('minifed/stopQueue', m)
             time.sleep(1)  # time for clients to finish
             exit()
+
         controller.reset_acc_list()
+
+    with open(saved_model_file, "w", encoding="utf-8") as f:
+        json.dump(best_model, f, ensure_ascii=False, indent=2)
+    spnfl_logger.info(f'T_SAVE_END')
 
     logger.info('stop_condition: rounds', extra=metricType)
     print(color.RED + f'rounds threshold met! stopping the training!' + color.RESET)
