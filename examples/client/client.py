@@ -1,4 +1,5 @@
 import importlib
+
 import paho.mqtt.client as mqtt
 import numpy as np
 
@@ -7,6 +8,8 @@ import time
 import sys
 import traceback
 import time
+import logging
+from logging import Formatter
 try:
     import torch
 except:
@@ -28,24 +31,47 @@ n = len(sys.argv)
 print(f"N: {n}", file=sys.stderr)
 
 # check if client_instaciation_args are present
-if n != 4 and n != 5:
+if n != 5 and n != 6:
     print(
-        "correct use: python client.py <broker_address> <name> <id> [client_instanciation_args].")
+        "correct use: python client.py <broker_address> <name> <id> <arquivo.log> [client_instanciation_args].")
     exit()
 
 BROKER_ADDR = sys.argv[1]
 CLIENT_NAME = sys.argv[2]
 CLIENT_ID = int(sys.argv[3])
+log_file = sys.argv[4] + CLIENT_NAME + ".log"
+spnfl_log_file = sys.argv[4] + CLIENT_NAME + "_spnfl.log"
 # MODE = sys.argv[4]
 CLIENT_INSTANTIATION_ARGS = {}
-if len(sys.argv) == 5 and (sys.argv[4] is not None):
-    CLIENT_INSTANTIATION_ARGS = json.loads(sys.argv[4])
+if len(sys.argv) == 6 and (sys.argv[5] is not None):
+    CLIENT_INSTANTIATION_ARGS = json.loads(sys.argv[5])
 
 trainer_class = CLIENT_INSTANTIATION_ARGS.get("trainer_class")
 if trainer_class is None:
     trainer_class = "TrainerMNIST"
 
 selected = False
+
+FORMAT = "%(asctime)s - %(infotype)-6s - %(levelname)s - %(message)s"
+# logging.basicConfig(level=logging.INFO, filename=log_file,
+#                    format=FORMAT, filemode="w")
+# logger = logging.getLogger(__name__)
+
+# logger geral
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+h_general = logging.FileHandler(filename=log_file, mode="w")
+h_general.setFormatter(Formatter(FORMAT))
+logger.addHandler(h_general)
+
+# logger spnfl (artigo https://sol.sbc.org.br/index.php/sbrc/article/view/35122/34913)
+FORMAT_SPNFL = "%(asctime)s - %(message)s"
+spnfl_logger = logging.getLogger("spnfl")
+spnfl_logger.setLevel(logging.INFO)
+spnfl_logger.propagate = False  # não manda para os handlers do "myapp"
+h_spnfl = logging.FileHandler(spnfl_log_file, mode="w")
+h_spnfl.setFormatter(Formatter(FORMAT_SPNFL))
+spnfl_logger.addHandler(h_spnfl)
 
 
 def default(obj):
@@ -95,8 +121,10 @@ def on_server_args(client, userdata, message):
     if msg['id'] == CLIENT_NAME:
         if msg['args'] is not None:
             trainer.set_args(msg['args'])
+
         client.publish('minifed/ready',
                        json.dumps({"id": CLIENT_NAME}, default=default))
+        spnfl_logger.info(f'T_ARRIVAL')
 
 
 """
@@ -113,16 +141,17 @@ def on_message_selection(client, userdata, message):
         if client_id not in n_round:
             n_round[client_id] = 0
         n_round[client_id] += 1
+        spnfl_logger.info(f'ROUND {n_round[client_id]}')
         if bool(msg['selected']):
+            spnfl_logger.info(f'T_SELECT True')
             selected = True
             print(color.BOLD_START + '[{}] new round starting'.format(n_round[client_id]) + color.BOLD_END)
             print(
                 f'trainer was selected for training this round and will start training!')
 
             resp_dict = {'id': CLIENT_NAME, 'success': True }
-
             t0 = time.perf_counter()
-
+            spnfl_logger.info(f'T_TRAIN_START')
             try:
                 trainer.train_model()
                 resp_dict['weights'] = trainer.get_weights()
@@ -132,22 +161,26 @@ def on_message_selection(client, userdata, message):
             except Exception:
                 print(traceback.format_exc())
                 resp_dict['success'] = False
-
             t_train = (time.perf_counter() - t0) * 1000
             resp_dict['t_train'] = t_train
 
+            spnfl_logger.info(f'T_TRAIN_END {resp_dict['success']}')
             response = json.dumps(resp_dict, default=default)
 
             client.publish('minifed/preAggQueue', response)
+            spnfl_logger.info(f'T_RETURN_0')
             print(f'finished training and sent weights!')
         else:
+            spnfl_logger.info(f'T_SELECT False')
             selected = False
             print(color.BOLD_START + '[{}] new round starting'.format(n_round[client_id]) + color.BOLD_END)
             print(f'trainer was not selected for training this round')
 
+
 # callback for posAggQueue: gets aggregated weights and publish validation results on the metricsQueue
 def on_message_agg(client, userdata, message):
     global selected
+    spnfl_logger.info(f'T_SEND')
     print(f'received aggregated weights!')
     msg = json.loads(message.payload.decode("utf-8"))
     agg_weights = [np.asarray(w, dtype=np.float32)
@@ -164,6 +197,7 @@ def on_message_agg(client, userdata, message):
 
     print(f'sending eval metrics!\n')
     client.publish('minifed/metricsQueue', response)
+    spnfl_logger.info(f'T_RETURN_1')
 
 # callback for stopQueue: if conditions are met, stop training and exit process
 def on_message_stop(client, userdata, message):
@@ -183,6 +217,8 @@ client.message_callback_add('minifed/serverArgs', on_server_args)
 
 # start waiting for jobs
 client.loop_start()
+
+spnfl_logger.info("INIT_EXPERIMENT")
 
 response = json.dumps({'id': CLIENT_NAME, 'accuracy': trainer.eval_model(
 ), "metrics": trainer.all_metrics()}, default=default)
