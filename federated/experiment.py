@@ -10,7 +10,9 @@ from federated.node import VOLUME_FOLDER
 class Experiment:
     def __init__(self, experiments_folder, experiment_name, create_new=True):
         self.path = None
-        self.now = None
+        self.client_local_path = "client_log"
+        self.client_path = f"{VOLUME_FOLDER}/{self.client_local_path}"
+        self.now = datetime.now()
         self.local_path = None
         self.name = experiment_name
         self.experiments_folder = experiments_folder
@@ -19,7 +21,7 @@ class Experiment:
         self.create_folder()
 
     def create_client_log_folder(self):
-        path = Path("client_log")
+        path = Path(self.client_local_path)
         if not path.exists():
             os.makedirs(path)
 
@@ -27,7 +29,6 @@ class Experiment:
         # Salve a máscara atual
         old_mask = os.umask(0o000)
 
-        self.now = datetime.now()
         if self.create_new:
             today_str = self.now.strftime("%Y_%m_%d_")
             self.local_path = f"{self.experiments_folder}/{today_str}{self.name}"
@@ -54,13 +55,21 @@ class Experiment:
         # Restaure a máscara original
         os.umask(old_mask)
 
-    def getFileName(self, extension=".log"):
+    def getFileName(self, extension=""):
         now_str = self.now.strftime("%Hh%Mm%Ss")
         return f"{self.path}/{now_str}{self.name}{extension}"
 
-    def getFileNameLocal(self, extension=".log"):
+    def getFileNameLocal(self, extension=""):
         now_str = self.now.strftime("%Hh%Mm%Ss")
         return f"{self.local_path}/{now_str}{self.name}{extension}"
+
+    def getClientFileName(self):
+        now_str = self.now.strftime("%Hh%Mm%Ss")
+        return f"{self.client_path}/{now_str}{self.name}"
+
+    def getClientFileNameLocal(self):
+        now_str = self.now.strftime("%Hh%Mm%Ss")
+        return f"{self.client_local_path}/{now_str}{self.name}"
 
     def copyFileToExperimentFolder(self, file_name=''):
         shutil.copyfile(file_name, self.getFileNameLocal(

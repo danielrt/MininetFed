@@ -1,3 +1,5 @@
+import os
+import shlex
 import time
 import json
 
@@ -144,17 +146,16 @@ class Client (Docker):
         self.cmd("ifconfig eth0 down")
 
     def run(self, broker_addr, experiment_controller, args=None):
-        if args is None:
-            args = {}
         self.experiment = experiment_controller
         self.broker_addr = broker_addr
 
-        cmd = f"""bash -c "python3 {self.script} {self.broker_addr} {self.name} {self.numeric_id} {self.experiment.getFileName(extension="")} 2> {VOLUME_FOLDER}/client_log/{self.experiment.getFileName(extension='''''')}_err.txt """
+        cmd = f"""bash -c "python3 {self.script} {self.broker_addr} {self.name} {self.numeric_id} {self.experiment.getClientFileName()} 2> {self.experiment.getClientFileName()}_err_{self.name}.txt """
 
         if self.args is not None and len(self.args) != 0:
             json_str = json.dumps(self.args).replace('"', '\\"')
             cmd += f"'{json_str}'"
         cmd += '" ;'
+
         self.cmd("route add default gw %s" %
                  self.broker_addr)
 
@@ -189,7 +190,7 @@ class ClientSensor (DockerSensor):
         self.experiment = experiment_controller
         self.broker_addr = broker_addr
 
-        cmd = f"""bash -c "python3 {self.script} {self.broker_addr} {self.name} {self.numeric_id} {self.experiment.getFileName(extension="")} 2> {VOLUME_FOLDER}/client_log/{self.experiment.getFileName(extension='''''')}_err.txt """
+        cmd = f"""bash -c "python3 {self.script} {self.broker_addr} {self.name} {self.numeric_id} {self.experiment.getFileName()} 2> {VOLUME_FOLDER}/client_log/{self.experiment.getFileName()}_err.txt """
 
         if self.args is not None and len(self.args) != 0:
             json_str = json.dumps(self.args).replace('"', '\\"')
@@ -220,7 +221,7 @@ class Monitor (Docker):
         self.broker_addr = broker_addr
         Docker.start(self)
         self.cmd("route add default gw %s" % self.broker_addr)
-        command = f"bash -c 'python3 {self.script} {self.broker_addr} {self.experiment.getFileName(extension='''''')}.net'"
+        command = f'bash -c "python3 {self.script} {self.broker_addr} {self.experiment.getFileName()}.net"'
         makeTerm(self, cmd=command)
 
 
@@ -252,7 +253,7 @@ class Server (Docker):
         self.experiment = experiment_controller
         self.broker_addr = broker_addr
 
-        cmd = f"""bash -c "python3 {self.script} {self.broker_addr} {self.experiment.getFileName(extension="")} 2> {self.experiment.getFileName(extension='''''')}_err.txt """
+        cmd = f"""bash -c "python3 {self.script} {self.broker_addr} {self.experiment.getFileName()} 2> {self.experiment.getFileName()}_err.txt """
 
         if self.args is not None and len(self.args) != 0:
             json_str = json.dumps(self.args).replace('"', '\\"')
@@ -289,7 +290,7 @@ class ServerSensor (DockerSensor):
     def run(self, broker_addr, experiment_controller):
         self.experiment = experiment_controller
         self.broker_addr = broker_addr
-        cmd = f"""bash -c "python3 {self.script} {self.broker_addr} {self.experiment.getFileName(extension="")} 2> {self.experiment.getFileName(extension='''''')}_err.txt """
+        cmd = f"""bash -c "python3 {self.script} {self.broker_addr} {self.experiment.getFileName()} 2> {self.experiment.getFileName()}_err.txt """
 
         if self.args is not None and len(self.args) != 0:
             json_str = json.dumps(self.args).replace('"', '\\"')
