@@ -39,9 +39,9 @@ def server():
 
     server_args = json.loads(sys.argv[3])
     broker_addr = sys.argv[1]
-    log_file = sys.argv[2] + ".log"
-    saved_model_file = sys.argv[2] + "_best.model"
-    spnfl_log_file = sys.argv[2] + "_spnfl.log"
+    log_file = f'{sys.argv[2]}/server.log'
+    saved_model_file = f'{sys.argv[2]}/best.model'
+    spnfl_log_file = f'{sys.argv[2]}/spn.log'
     min_trainers = server_args["min_trainers"]
     client_selector = server_args["client_selector"]
     aggregator = server_args["aggregator"]
@@ -275,28 +275,31 @@ def server():
             print(
                 color.BLUE + f"Estimated time remaining until the end of the experiment: {mins}m {secs}s" + color.RESET)
 
+        spnfl_logger.info(f'ROUND_DURATION {round_duration}')
+
         spnfl_logger.info(f'T_SAVE_START')
         if mean_acc >= best_acc:
             best_model = controller.get_global_model()
             best_acc = mean_acc
+        spnfl_logger.info(f'T_SAVE_END')
 
         # update stop queue or continue process
         if mean_acc >= stop_acc:
             with open(saved_model_file, "w", encoding="utf-8") as f:
                 json.dump(best_model, f, ensure_ascii=False, indent=2)
-            spnfl_logger.info(f'T_SAVE_END')
+            #spnfl_logger.info(f'T_SAVE_END')
 
             logger.info('stop_condition: accuracy', extra=metricType)
             print(color.RED + f'accuracy threshold met! stopping the training!')
             m = json.dumps({'stop': True})
             client.publish('minifed/stopQueue', m)
             time.sleep(1)  # time for clients to finish
-            spnfl_logger.info(f'T_COMPUTE_END')
+            #spnfl_logger.info(f'T_COMPUTE_END')
             exit()
 
-        spnfl_logger.info(f'T_SAVE_END')
+        #spnfl_logger.info(f'T_SAVE_END')
         controller.reset_acc_list()
-        spnfl_logger.info(f'T_COMPUTE_END')
+        #spnfl_logger.info(f'T_COMPUTE_END')
 
     spnfl_logger.info(f'T_SAVE_START')
     with open(saved_model_file, "w", encoding="utf-8") as f:

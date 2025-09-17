@@ -149,7 +149,9 @@ class Client (Docker):
         self.experiment = experiment_controller
         self.broker_addr = broker_addr
 
-        cmd = f"""bash -c "python3 {self.script} {self.broker_addr} {self.name} {self.numeric_id} {self.experiment.getClientFileName()} 2> {self.experiment.getClientFileName()}_err_{self.name}.txt """
+        logdir = self.experiment.get_client_logs_path()
+        err_path = os.path.join(logdir, f'{self.name}_err.txt')
+        cmd = f"""bash -c "umask 000; python3 {self.script} {self.broker_addr} {self.name} {self.numeric_id} {logdir} 2> {err_path} """
 
         if self.args is not None and len(self.args) != 0:
             json_str = json.dumps(self.args).replace('"', '\\"')
@@ -190,7 +192,9 @@ class ClientSensor (DockerSensor):
         self.experiment = experiment_controller
         self.broker_addr = broker_addr
 
-        cmd = f"""bash -c "python3 {self.script} {self.broker_addr} {self.name} {self.numeric_id} {self.experiment.getClientFileName()} 2> {self.experiment.getClientFileName()}_err_{self.name}.txt """
+        logdir = self.experiment.get_client_logs_path()
+        err_path = os.path.join(logdir, f'{self.name}_err.txt')
+        cmd = f"""bash -c "umask 000; python3 {self.script} {self.broker_addr} {self.name} {self.numeric_id} {logdir} 2> {err_path} """
 
         if self.args is not None and len(self.args) != 0:
             json_str = json.dumps(self.args).replace('"', '\\"')
@@ -200,6 +204,7 @@ class ClientSensor (DockerSensor):
         self.cmd("route add -A inet6 default gw  %s" %
                  self.broker_addr)
         #print(f"cmd:{cmd}")
+        os.umask(0o000)
         makeTerm(self, cmd=cmd)
 
 
@@ -221,7 +226,7 @@ class Monitor (Docker):
         self.broker_addr = broker_addr
         Docker.start(self)
         self.cmd("route add default gw %s" % self.broker_addr)
-        command = f'bash -c "python3 {self.script} {self.broker_addr} {self.experiment.getFileName()}.net"'
+        command = f'bash -c "umask 000; python3 {self.script} {self.broker_addr} {self.experiment.get_logs_path()}/monitor.net"'
         makeTerm(self, cmd=command)
 
 
@@ -253,7 +258,9 @@ class Server (Docker):
         self.experiment = experiment_controller
         self.broker_addr = broker_addr
 
-        cmd = f"""bash -c "python3 {self.script} {self.broker_addr} {self.experiment.getFileName()} 2> {self.experiment.getFileName()}_err.txt """
+        logdir = self.experiment.get_logs_path()
+        err_path = os.path.join(logdir, "err.txt")
+        cmd = f"""bash -c "umask 000; python3 {self.script} {self.broker_addr} {logdir} 2> {err_path} """
 
         if self.args is not None and len(self.args) != 0:
             json_str = json.dumps(self.args).replace('"', '\\"')
@@ -262,6 +269,7 @@ class Server (Docker):
         self.cmd("route add default gw %s" %
                  self.broker_addr)
 
+        os.umask(0o000)
         makeTerm(self, cmd=cmd)
 
 
@@ -290,7 +298,10 @@ class ServerSensor (DockerSensor):
     def run(self, broker_addr, experiment_controller):
         self.experiment = experiment_controller
         self.broker_addr = broker_addr
-        cmd = f"""bash -c "python3 {self.script} {self.broker_addr} {self.experiment.getFileName()} 2> {self.experiment.getFileName()}_err.txt """
+
+        logdir = self.experiment.get_logs_path()
+        err_path = os.path.join(logdir, "err.txt")
+        cmd = f"""bash -c "umask 000; python3 {self.script} {self.broker_addr} {logdir} 2> {err_path} """
 
         if self.args is not None and len(self.args) != 0:
             json_str = json.dumps(self.args).replace('"', '\\"')

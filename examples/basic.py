@@ -14,11 +14,10 @@ volumes = [f"{Path.cwd()}:" + volume, "/tmp/.X11-unix:/tmp/.X11-unix:rw",
 experiment_config = {
     "ipBase": "10.0.0.0/24",
     "experiments_folder": "experiments",
-    "experiment_name": "basic",
-    "date_prefix": False
+    "experiment_name": "basic"
 }
 # See server/client_selection.py for the available client_selector models
-server_args = {"min_trainers": 8, "num_rounds": 5, "stop_acc": 0.999,
+server_args = {"min_trainers": 8, "num_rounds": 10, "stop_acc": 0.999,
                'client_selector': 'All', 'aggregator': "FedAvg"}
 client_args = {"mode": 'random same_samples', 'num_samples': 15000,
                "trainer_class": "TrainerMNIST"}

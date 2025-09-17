@@ -16,7 +16,6 @@ experiment_config = {
     "ipBase": "10.0.0.0/24",
     "experiments_folder": "experiments",
     "experiment_name": "limitations",
-    "date_prefix": False
 }
 # See server/client_selection.py for the available client_selector models
 server_args = {"min_trainers": 8, "num_rounds": 1, "stop_acc": 0.999,

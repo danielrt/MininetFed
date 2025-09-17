@@ -1,15 +1,16 @@
 import importlib
 
+
 import paho.mqtt.client as mqtt
 import numpy as np
 
 import json
-from datetime import datetime
 import sys
 import traceback
 import time
 import logging
 from logging import Formatter
+import os
 try:
     import torch
 except:
@@ -26,6 +27,8 @@ def create_object(package, class_name, **atributtes):
         print(f"Error: {e}", file=sys.stderr)
         return None
 
+os.umask(0o000)
+
 n = len(sys.argv)
 
 print(f"N: {n}", file=sys.stderr)
@@ -36,13 +39,11 @@ if n != 5 and n != 6:
         "correct use: python client.py <broker_address> <name> <id> <arquivo.log> [client_instanciation_args].")
     exit()
 
-now_str = datetime.now().strftime("%Hh%Mm%Ss")
-
 BROKER_ADDR = sys.argv[1]
 CLIENT_NAME = sys.argv[2]
 CLIENT_ID = int(sys.argv[3])
-log_file = sys.argv[4] + CLIENT_NAME + ".log"
-spnfl_log_file = sys.argv[4] + "_spnfl_" + CLIENT_NAME + ".log"
+log_file = f'{sys.argv[4]}/{CLIENT_NAME}.log'
+spnfl_log_file = f'{sys.argv[4]}/{CLIENT_NAME}_spn.log'
 # MODE = sys.argv[4]
 CLIENT_INSTANTIATION_ARGS = {}
 if len(sys.argv) == 6 and (sys.argv[5] is not None):
@@ -128,7 +129,6 @@ def on_server_args(client, userdata, message):
 
         client.publish('minifed/ready',
                        json.dumps({"id": CLIENT_NAME}, default=default))
-        spnfl_logger.info(f'T_ARRIVAL')
 
 
 """
@@ -154,7 +154,7 @@ def on_message_selection(client, userdata, message):
                 f'trainer was selected for training this round and will start training!')
 
             resp_dict = {'id': CLIENT_NAME, 'success': True }
-            t0 = time.perf_counter()
+            t0 = time.time()
             spnfl_logger.info(f'T_TRAIN_START')
             try:
                 trainer.train_model()
@@ -165,7 +165,7 @@ def on_message_selection(client, userdata, message):
             except Exception:
                 print(traceback.format_exc())
                 resp_dict['success'] = False
-            t_train = (time.perf_counter() - t0) * 1000
+            t_train = time.time() - t0
             resp_dict['t_train'] = t_train
 
             spnfl_logger.info(f"T_TRAIN_END {resp_dict['success']}")
@@ -227,6 +227,7 @@ spnfl_logger.info("INIT_EXPERIMENT")
 response = json.dumps({'id': CLIENT_NAME, 'accuracy': trainer.eval_model(
 ), "metrics": trainer.all_metrics()}, default=default)
 client.publish('minifed/registerQueue',  response)
+spnfl_logger.info(f'T_ARRIVAL')
 print(color.BOLD_START +
       f'trainer {CLIENT_NAME} connected!\n' + color.BOLD_END)
 
