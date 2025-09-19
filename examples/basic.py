@@ -17,7 +17,7 @@ experiment_config = {
     "experiment_name": "basic"
 }
 # See server/client_selection.py for the available client_selector models
-server_args = {"min_trainers": 16, "num_rounds": 100, "stop_acc": 0.999,
+server_args = {"min_trainers": 8, "num_rounds": 5, "stop_acc": 0.999,
                'client_selector': 'All', 'aggregator': "FedAvg"}
 client_args = {"mode": 'random same_samples', 'num_samples': 15000,
                "trainer_class": "TrainerMNIST"}

@@ -34,7 +34,7 @@ def server():
     if n < 4:
         logging.critical("incorrect use of server.py arguments")
         # <min_clients> <num_rounds> <accuracy_threshold>
-        print("correct use: python server.py <broker_address> <arquivo.log> <args>.")
+        print("correct use: python server.py <broker_address> <logs_path> <args>.")
         exit()
 
     server_args = json.loads(sys.argv[3])
@@ -112,8 +112,6 @@ def server():
         m = json.loads(message.payload.decode("utf-8"))
 
         spnfl_logger.info(f'T_RETURN_0 {m["id"]} {m["success"]}')
-        spnfl_logger.info(f'T_TRAIN  {m["t_train"]}')
-
 
         if m['success']:
             client_training_response = {}
@@ -191,7 +189,7 @@ def server():
         print(color.RESET + '\n' + color.BOLD_START +
               f'starting round {controller.get_current_round()}' + color.BOLD_END)
 
-        spnfl_logger.info(f'ROUND {controller.get_current_round()}')
+        spnfl_logger.info(f'START_ROUND {controller.get_current_round()}')
 
         spnfl_logger.info(f'T_SELECT_START')
 
@@ -255,7 +253,7 @@ def server():
             time.sleep(1)
         spnfl_logger.info(f'T_RETURN_1_END {controller.get_num_responses()}')
 
-        spnfl_logger.info(f'T_COMPUTE_START')
+        #spnfl_logger.info(f'T_COMPUTE_START')
         controller.reset_num_responses()  # reset num_responses for next round
         mean_acc = controller.get_mean_acc()
         logger.info(f'mean_accuracy: {mean_acc}\n', extra=metricType)
@@ -275,13 +273,14 @@ def server():
             print(
                 color.BLUE + f"Estimated time remaining until the end of the experiment: {mins}m {secs}s" + color.RESET)
 
-        spnfl_logger.info(f'ROUND_DURATION {round_duration}')
 
         spnfl_logger.info(f'T_SAVE_START')
         if mean_acc >= best_acc:
             best_model = controller.get_global_model()
             best_acc = mean_acc
         spnfl_logger.info(f'T_SAVE_END')
+
+        spnfl_logger.info(f'ROUND_DURATION {round_duration}')
 
         # update stop queue or continue process
         if mean_acc >= stop_acc:
@@ -295,16 +294,19 @@ def server():
             client.publish('minifed/stopQueue', m)
             time.sleep(1)  # time for clients to finish
             #spnfl_logger.info(f'T_COMPUTE_END')
+            spnfl_logger.info(f'END_ROUND {controller.get_current_round()}')
             exit()
 
         #spnfl_logger.info(f'T_SAVE_END')
         controller.reset_acc_list()
         #spnfl_logger.info(f'T_COMPUTE_END')
+        spnfl_logger.info(f'END_ROUND {controller.get_current_round()}')
 
-    spnfl_logger.info(f'T_SAVE_START')
+
+    #spnfl_logger.info(f'T_SAVE_START')
     with open(saved_model_file, "w", encoding="utf-8") as f:
         json.dump(best_model, f, ensure_ascii=False, indent=2)
-    spnfl_logger.info(f'T_SAVE_END')
+    #spnfl_logger.info(f'T_SAVE_END')
 
     logger.info('stop_condition: rounds', extra=metricType)
     print(color.RED + f'rounds threshold met! stopping the training!' + color.RESET)

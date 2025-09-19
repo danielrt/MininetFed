@@ -36,7 +36,7 @@ print(f"N: {n}", file=sys.stderr)
 # check if client_instaciation_args are present
 if n != 5 and n != 6:
     print(
-        "correct use: python client.py <broker_address> <name> <id> <arquivo.log> [client_instanciation_args].")
+        "correct use: python client.py <broker_address> <name> <id> <logs_path> [client_instanciation_args].")
     exit()
 
 BROKER_ADDR = sys.argv[1]
@@ -145,7 +145,7 @@ def on_message_selection(client, userdata, message):
         if client_id not in n_round:
             n_round[client_id] = 0
         n_round[client_id] += 1
-        spnfl_logger.info(f'ROUND {n_round[client_id]}')
+        spnfl_logger.info(f'START_ROUND {n_round[client_id]}')
         if bool(msg['selected']):
             spnfl_logger.info(f'T_SELECT True')
             selected = True
@@ -155,7 +155,6 @@ def on_message_selection(client, userdata, message):
 
             resp_dict = {'id': CLIENT_NAME, 'success': True }
             t0 = time.time()
-            spnfl_logger.info(f'T_TRAIN_START')
             try:
                 trainer.train_model()
                 resp_dict['weights'] = trainer.get_weights()
@@ -166,9 +165,8 @@ def on_message_selection(client, userdata, message):
                 print(traceback.format_exc())
                 resp_dict['success'] = False
             t_train = time.time() - t0
-            resp_dict['t_train'] = t_train
 
-            spnfl_logger.info(f"T_TRAIN_END {resp_dict['success']}")
+            spnfl_logger.info(f"T_TRAIN {resp_dict['success']} {t_train}")
             response = json.dumps(resp_dict, default=default)
 
             client.publish('minifed/preAggQueue', response)
@@ -202,6 +200,8 @@ def on_message_agg(client, userdata, message):
     print(f'sending eval metrics!\n')
     client.publish('minifed/metricsQueue', response)
     spnfl_logger.info(f'T_RETURN_1')
+    spnfl_logger.info(f'END_ROUND {n_round[CLIENT_NAME]}')
+
 
 # callback for stopQueue: if conditions are met, stop training and exit process
 def on_message_stop(client, userdata, message):
