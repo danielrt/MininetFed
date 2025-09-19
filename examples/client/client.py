@@ -145,7 +145,7 @@ def on_message_selection(client, userdata, message):
         if client_id not in n_round:
             n_round[client_id] = 0
         n_round[client_id] += 1
-        spnfl_logger.info(f'START_ROUND {n_round[client_id]}')
+        spnfl_logger.info(f'START_ROUND {n_round[client_id]-1}')
         if bool(msg['selected']):
             spnfl_logger.info(f'T_SELECT True')
             selected = True
@@ -200,7 +200,7 @@ def on_message_agg(client, userdata, message):
     print(f'sending eval metrics!\n')
     client.publish('minifed/metricsQueue', response)
     spnfl_logger.info(f'T_RETURN_1')
-    spnfl_logger.info(f'END_ROUND {n_round[CLIENT_NAME]}')
+    spnfl_logger.info(f'END_ROUND {n_round[CLIENT_NAME]-1}')
 
 
 # callback for stopQueue: if conditions are met, stop training and exit process

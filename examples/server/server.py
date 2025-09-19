@@ -189,7 +189,7 @@ def server():
         print(color.RESET + '\n' + color.BOLD_START +
               f'starting round {controller.get_current_round()}' + color.BOLD_END)
 
-        spnfl_logger.info(f'START_ROUND {controller.get_current_round()}')
+        spnfl_logger.info(f'START_ROUND {controller.get_current_round()-1}')
 
         spnfl_logger.info(f'T_SELECT_START')
 

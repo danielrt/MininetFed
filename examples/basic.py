@@ -33,7 +33,7 @@ def topology():
                        args=server_args, volumes=volumes,
                        dimage='mininetfed:server')
     clients = []
-    for i in range(16):
+    for i in range(8):
         clients.append(net.addHost(f'sta{i}', cls=Client, script="client/client.py",
                                    args=client_args, volumes=volumes,
                                    dimage='mininetfed:client_tf_cuda', numeric_id=i))
