@@ -17,7 +17,7 @@ experiment_config = {
     "experiment_name": "basic"
 }
 # See server/client_selection.py for the available client_selector models
-server_args = {"min_trainers": 8, "num_rounds": 10, "stop_acc": 0.999,
+server_args = {"min_trainers": 16, "num_rounds": 100, "stop_acc": 0.999,
                'client_selector': 'All', 'aggregator': "FedAvg"}
 client_args = {"mode": 'random same_samples', 'num_samples': 15000,
                "trainer_class": "TrainerMNIST"}
@@ -33,7 +33,7 @@ def topology():
                        args=server_args, volumes=volumes,
                        dimage='mininetfed:server')
     clients = []
-    for i in range(8):
+    for i in range(16):
         clients.append(net.addHost(f'sta{i}', cls=Client, script="client/client.py",
                                    args=client_args, volumes=volumes,
                                    dimage='mininetfed:client_tf_cuda', numeric_id=i))
