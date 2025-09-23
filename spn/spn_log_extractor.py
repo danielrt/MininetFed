@@ -44,12 +44,12 @@ class Experiment:
         n_rounds = len(server_rounds)
         for server_round in server_rounds:
             round_id = server_round.round_id
-            round_duration = server_round.round_duration
+            round_duration = server_round.round_duration * 1000
             self.server_metrics['ROUND_DURATION'] += round_duration
-            t_select = abs((server_round.events['T_SELECT_END'][0] - server_round.events['T_SELECT_START'][0]).total_seconds())
+            t_select = abs((server_round.events['T_SELECT_END'][0] - server_round.events['T_SELECT_START'][0]).total_seconds() * 1000)
             self.server_metrics['T_SELECT'] += t_select
-            t_return_0 = abs((server_round.events['T_RETURN_0_END'][0] - server_round.events['T_RETURN_0_START'][0]).total_seconds())
-            t_return_1 = abs((server_round.events['T_RETURN_1_END'][0] - server_round.events['T_RETURN_1_START'][0]).total_seconds())
+            t_return_0 = abs((server_round.events['T_RETURN_0_END'][0] - server_round.events['T_RETURN_0_START'][0]).total_seconds() * 1000)
+            t_return_1 = abs((server_round.events['T_RETURN_1_END'][0] - server_round.events['T_RETURN_1_START'][0]).total_seconds() * 1000)
             t_return = t_return_0 + t_return_1
             self.server_metrics['T_RETURN'] += t_return
             t_aggreg = abs((server_round.events['T_AGGREG_END'][0] - server_round.events['T_AGGREG_START'][0]).total_seconds())
@@ -78,23 +78,23 @@ class Experiment:
             n_rounds = len(client.rounds)
             for client_round in client.rounds:
                 round_id =  client_round.round_id
-                round_duration = client_round.round_duration.total_seconds()
+                round_duration = client_round.round_duration.total_seconds() * 1000
                 self.clients_metrics[client_id]['ROUND_DURATION'] += round_duration
                 self.clients_metrics_avg['ROUND_DURATION'] += round_duration
-                t_select = abs((client_round.events['T_SELECT'][0] - self.server.clients[client_id].rounds[round_id].events['T_SELECT'][0]).total_seconds())
+                t_select = abs((client_round.events['T_SELECT'][0] - self.server.clients[client_id].rounds[round_id].events['T_SELECT'][0]).total_seconds() * 1000)
                 self.clients_metrics[client_id]['T_SELECT'] += t_select
                 self.clients_metrics_avg['T_SELECT'] += t_select
                 selected = client_round.events['T_SELECT'][1]
-                t_send = abs((client_round.events['T_SEND'][0] - self.server.rounds[round_id].events['T_SEND'][0]).total_seconds())
+                t_send = abs((client_round.events['T_SEND'][0] - self.server.rounds[round_id].events['T_SEND'][0]).total_seconds() * 1000)
                 self.clients_metrics[client_id]['T_SEND'] += t_send
                 self.clients_metrics_avg['T_SEND'] += t_send
-                t_train = float(client_round.events['T_TRAIN'][2])
+                t_train = float(client_round.events['T_TRAIN'][2]) * 1000.0
                 self.clients_metrics[client_id]['T_TRAIN'] += t_train
                 self.clients_metrics_avg['T_TRAIN'] += t_train
                 trained = client_round.events['T_TRAIN'][1]
-                t_return_0 = abs((client_round.events['T_RETURN_0'][0] - self.server.clients[client_id].rounds[round_id].events['T_RETURN_0'][0]).total_seconds())
-                t_return_1 = abs((client_round.events['T_RETURN_1'][0] - self.server.clients[client_id].rounds[round_id].events['T_RETURN_1'][0]).total_seconds())
-                t_return = (t_return_0 + t_return_1) / 2
+                t_return_0 = abs((client_round.events['T_RETURN_0'][0] - self.server.clients[client_id].rounds[round_id].events['T_RETURN_0'][0]).total_seconds() * 1000)
+                t_return_1 = abs((client_round.events['T_RETURN_1'][0] - self.server.clients[client_id].rounds[round_id].events['T_RETURN_1'][0]).total_seconds() * 1000)
+                t_return = (t_return_0 + t_return_1) / 2.0
                 self.clients_metrics[client_id]['T_RETURN'] += t_return
                 self.clients_metrics_avg['T_RETURN'] += t_return
                 data_csv.append([round_id, client_id, round_duration, t_select, selected, t_send, t_train, trained, t_return])
@@ -103,9 +103,11 @@ class Experiment:
                 for key in self.clients_metrics[client_key].keys():
                     self.clients_metrics[client_key][key] = self.clients_metrics[client_key][key] / n_rounds
 
-            n_clients = len(self.clients)
-            for client_metric in self.clients_metrics_avg:
-                self.clients_metrics_avg[client_metric] = self.clients_metrics[client_metric] / (n_rounds * n_clients)
+        n_clients = len(self.clients)
+        for client_metric in self.clients_metrics_avg:
+            for client_id in self.clients_metrics:
+                self.clients_metrics_avg[client_metric] += self.clients_metrics[client_id][client_metric]
+            self.clients_metrics_avg[client_metric] = self.clients_metrics_avg[client_metric] / n_clients
 
         csv_file_path = os.path.join(path, 'clients.csv')
 
@@ -125,7 +127,7 @@ class Experiment:
                 f.write(f'\t{client_metric}: {self.clients_metrics_avg[client_metric]}\n')
             f.write(f'\nCLIENT METRICS BY CLIENT:\n')
             for client in self.clients_metrics:
-                f.write(f'\t{client}:\n')
+                f.write(f'\t\t{client}:\n')
                 for client_metric in self.clients_metrics[client]:
                     f.write(f'\t{client_metric}: {self.clients_metrics[client][client_metric]}\n')
 
