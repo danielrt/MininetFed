@@ -31,6 +31,7 @@ class Experiment:
         self.clients_metrics = {}
         self.clients_metrics_avg = {'ROUND_DURATION' : 0.0, 'T_SELECT' : 0.0, 'T_SEND' : 0.0, 'T_TRAIN' : 0.0, 'T_RETURN' : 0.0}
 
+
     def save_spn_metrics(self, path):
         self.save_server_csv(path)
         self.save_clients_csv(path)
@@ -52,9 +53,9 @@ class Experiment:
             t_return_1 = abs((server_round.events['T_RETURN_1_END'][0] - server_round.events['T_RETURN_1_START'][0]).total_seconds() * 1000)
             t_return = t_return_0 + t_return_1
             self.server_metrics['T_RETURN'] += t_return
-            t_aggreg = abs((server_round.events['T_AGGREG_END'][0] - server_round.events['T_AGGREG_START'][0]).total_seconds())
+            t_aggreg = abs((server_round.events['T_AGGREG_END'][0] - server_round.events['T_AGGREG_START'][0]).total_seconds() * 1000)
             self.server_metrics['T_AGGREG'] += t_aggreg
-            t_save = abs((server_round.events['T_SAVE_END'][0] - server_round.events['T_SAVE_START'][0]).total_seconds())
+            t_save = abs((server_round.events['T_SAVE_END'][0] - server_round.events['T_SAVE_START'][0]).total_seconds() * 1000)
             self.server_metrics['T_SAVE'] += t_save
             t_compute = round_duration - t_select - t_return - t_aggreg - t_save
             self.server_metrics['T_COMPUTE'] += t_compute
@@ -80,33 +81,29 @@ class Experiment:
                 round_id =  client_round.round_id
                 round_duration = client_round.round_duration.total_seconds() * 1000
                 self.clients_metrics[client_id]['ROUND_DURATION'] += round_duration
-                self.clients_metrics_avg['ROUND_DURATION'] += round_duration
                 t_select = abs((client_round.events['T_SELECT'][0] - self.server.clients[client_id].rounds[round_id].events['T_SELECT'][0]).total_seconds() * 1000)
                 self.clients_metrics[client_id]['T_SELECT'] += t_select
-                self.clients_metrics_avg['T_SELECT'] += t_select
                 selected = client_round.events['T_SELECT'][1]
                 t_send = abs((client_round.events['T_SEND'][0] - self.server.rounds[round_id].events['T_SEND'][0]).total_seconds() * 1000)
                 self.clients_metrics[client_id]['T_SEND'] += t_send
-                self.clients_metrics_avg['T_SEND'] += t_send
                 t_train = float(client_round.events['T_TRAIN'][2]) * 1000.0
                 self.clients_metrics[client_id]['T_TRAIN'] += t_train
-                self.clients_metrics_avg['T_TRAIN'] += t_train
                 trained = client_round.events['T_TRAIN'][1]
                 t_return_0 = abs((client_round.events['T_RETURN_0'][0] - self.server.clients[client_id].rounds[round_id].events['T_RETURN_0'][0]).total_seconds() * 1000)
                 t_return_1 = abs((client_round.events['T_RETURN_1'][0] - self.server.clients[client_id].rounds[round_id].events['T_RETURN_1'][0]).total_seconds() * 1000)
                 t_return = (t_return_0 + t_return_1) / 2.0
                 self.clients_metrics[client_id]['T_RETURN'] += t_return
-                self.clients_metrics_avg['T_RETURN'] += t_return
                 data_csv.append([round_id, client_id, round_duration, t_select, selected, t_send, t_train, trained, t_return])
 
-            for client_key in self.clients_metrics.keys():
-                for key in self.clients_metrics[client_key].keys():
-                    self.clients_metrics[client_key][key] = self.clients_metrics[client_key][key] / n_rounds
+            for key in self.clients_metrics[client_id].keys():
+                self.clients_metrics[client_id][key] = self.clients_metrics[client_id][key] / n_rounds
 
         n_clients = len(self.clients)
-        for client_metric in self.clients_metrics_avg:
-            for client_id in self.clients_metrics:
+        for client_id in self.clients_metrics:
+            for client_metric in self.clients_metrics[client_id]:
                 self.clients_metrics_avg[client_metric] += self.clients_metrics[client_id][client_metric]
+
+        for client_metric in self.clients_metrics_avg:
             self.clients_metrics_avg[client_metric] = self.clients_metrics_avg[client_metric] / n_clients
 
         csv_file_path = os.path.join(path, 'clients.csv')
@@ -129,7 +126,7 @@ class Experiment:
             for client in self.clients_metrics:
                 f.write(f'\t\t{client}:\n')
                 for client_metric in self.clients_metrics[client]:
-                    f.write(f'\t{client_metric}: {self.clients_metrics[client][client_metric]}\n')
+                    f.write(f'\t\t\t{client_metric}: {self.clients_metrics[client][client_metric]}\n')
 
 def process_log_line(line):
     timestamp_str, content = line.split(" - ", 1)
@@ -214,7 +211,6 @@ def read_spn_logs(spn_logs_path):
                 if tag == 'END_ROUND':
                     round_id = round_id + 1
 
-
         # 2. Leitura dos arquivos de log dos clientes
         if os.path.exists(clients_spn_logs_dir):
             for filename in os.listdir(clients_spn_logs_dir):
@@ -250,9 +246,14 @@ def read_spn_logs(spn_logs_path):
                             if tag == 'END_ROUND':
                                 client.rounds[round_id].round_duration = timestamp - round_time_init
 
+    else:
+        return None
     return experiment
 
 if __name__ == "__main__":
     path = sys.argv[1] if len(sys.argv) > 1 else print("correct use: python spn_log_extractor.py <path_to_logs>")
     experiment = read_spn_logs(path)
-    experiment.save_spn_metrics(path)
+    if experiment:
+        experiment.save_spn_metrics(path)
+    else:
+        print("The provided path does not contain valid log files")
