@@ -280,7 +280,7 @@ def server():
             best_acc = mean_acc
         spnfl_logger.info(f'T_SAVE_END')
 
-        spnfl_logger.info(f'ROUND_DURATION {round_duration}')
+        #spnfl_logger.info(f'ROUND_DURATION {round_duration}')
 
         # update stop queue or continue process
         if mean_acc >= stop_acc:

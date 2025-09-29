@@ -14,6 +14,7 @@ class Server:
     def __init__(self):
         self.arrival_min_clients = 0
         self.arrival_actual_clients = 0
+        self.t_arrival = 0
         self.clients = {}
         self.rounds = []
 
@@ -21,7 +22,6 @@ class Round:
     def __init__(self, round_id):
         self.round_id = round_id
         self.events = {}
-        self.round_duration = 0
 
 class Experiment:
     def __init__(self):
@@ -29,6 +29,7 @@ class Experiment:
         self.clients = []
         self.server_metrics = {'ROUND_DURATION' : 0.0, 'T_SELECT' : 0.0, 'T_RETURN' : 0.0, 'T_AGGREG' : 0.0, 'T_SAVE' : 0.0, 'T_COMPUTE' : 0.0}
         self.clients_metrics = {}
+        self.clients_t_arrival = {}
         self.clients_metrics_avg = {'ROUND_DURATION' : 0.0, 'T_SELECT' : 0.0, 'T_SEND' : 0.0, 'T_TRAIN' : 0.0, 'T_RETURN' : 0.0}
 
 
@@ -45,7 +46,7 @@ class Experiment:
         n_rounds = len(server_rounds)
         for server_round in server_rounds:
             round_id = server_round.round_id
-            round_duration = server_round.round_duration * 1000
+            round_duration = abs((server_round.events['START_ROUND'][0] - server_round.events['END_ROUND'][0]).total_seconds() * 1000)
             self.server_metrics['ROUND_DURATION'] += round_duration
             t_select = abs((server_round.events['T_SELECT_END'][0] - server_round.events['T_SELECT_START'][0]).total_seconds() * 1000)
             self.server_metrics['T_SELECT'] += t_select
@@ -75,11 +76,12 @@ class Experiment:
         data_csv.append(data_coluns)
         for client in self.clients:
             client_id = client.client_id
+            self.clients_t_arrival[client_id] = abs((client.t_arrival - self.server.clients[client_id].t_arrival).total_seconds()) * 1000
             self.clients_metrics[client_id] = {'ROUND_DURATION' : 0.0, 'T_SELECT' : 0.0, 'T_SEND' : 0.0, 'T_TRAIN' : 0.0, 'T_RETURN' : 0.0}
             n_rounds = len(client.rounds)
             for client_round in client.rounds:
                 round_id =  client_round.round_id
-                round_duration = client_round.round_duration.total_seconds() * 1000
+                round_duration = abs((client_round.events['START_ROUND'][0] - client_round.events['END_ROUND'][0]).total_seconds() * 1000)
                 self.clients_metrics[client_id]['ROUND_DURATION'] += round_duration
                 t_select = abs((client_round.events['T_SELECT'][0] - self.server.clients[client_id].rounds[round_id].events['T_SELECT'][0]).total_seconds() * 1000)
                 self.clients_metrics[client_id]['T_SELECT'] += t_select
@@ -117,16 +119,25 @@ class Experiment:
             f.write(f'N_CLIENTS: {len(self.clients)}\n')
             f.write(f'N_ROUNDS: {len(self.server.rounds)}\n\n')
             f.write(f'SERVER METRICS:\n')
+            f.write(f'\tT_ARRIVAL: {self.server.t_arrival}\n')
+            f.write(f'\tT_ARRIVAL_MIN: {self.server.arrival_min_clients}\n')
+            f.write(f'\tT_ARRIVAL_CLIENTS: {self.server.arrival_actual_clients}\n')
             for server_metric in self.server_metrics:
                 f.write(f'\t{server_metric}: {self.server_metrics[server_metric]}\n')
             f.write(f'\nCLIENT METRICS:\n')
+            client_t_arrival_avg = 0
+            for client_id in self.clients_t_arrival:
+                client_t_arrival_avg += self.clients_t_arrival[client_id]
+            client_t_arrival_avg /= len(self.clients_t_arrival)
+            f.write(f'\tT_ARRIVAL: {client_t_arrival_avg}\n')
             for client_metric in self.clients_metrics_avg:
                 f.write(f'\t{client_metric}: {self.clients_metrics_avg[client_metric]}\n')
             f.write(f'\nCLIENT METRICS BY CLIENT:\n')
             for client in self.clients_metrics:
-                f.write(f'\t\t{client}:\n')
+                f.write(f'\t{client}:\n')
+                f.write(f'\t\tT_ARRIVAL: {self.clients_t_arrival[client]}\n')
                 for client_metric in self.clients_metrics[client]:
-                    f.write(f'\t\t\t{client_metric}: {self.clients_metrics[client][client_metric]}\n')
+                    f.write(f'\t\t{client_metric}: {self.clients_metrics[client][client_metric]}\n')
 
 def process_log_line(line):
     timestamp_str, content = line.split(" - ", 1)
@@ -147,8 +158,11 @@ def read_spn_logs(spn_logs_path):
         server = experiment.server
         with open(server_spn_log_path, 'r') as f:
             round_id = 0
+            server_t_arrival_0 = 0
             for line in f:
                 tag, timestamp, extras = process_log_line(line)
+                if tag == 'T_ARRIVAL_START':
+                    server_t_arrival_0 = timestamp
                 if tag == 'T_ARRIVAL':
                     client_id = extras[0]
                     if not client_id in server.clients:
@@ -159,9 +173,11 @@ def read_spn_logs(spn_logs_path):
                 if tag == 'T_ARRIVAL_END':
                     server.arrival_min_clients = extras[0]
                     server.arrival_actual_clients = extras[1]
+                    server.t_arrival = (timestamp - server_t_arrival_0).total_seconds() * 1000
                 if tag == 'START_ROUND':
                     round_id = int(extras[0])
                     server_round = Round(round_id)
+                    server_round.events[tag] = [timestamp]
                     server.rounds.append(server_round)
                 if tag == 'T_SELECT_START':
                     server.rounds[round_id].events[tag] = [timestamp]
@@ -206,9 +222,8 @@ def read_spn_logs(spn_logs_path):
                     server.rounds[round_id].events[tag] = [timestamp]
                 if tag == 'T_SAVE_END':
                     server.rounds[round_id].events[tag] = [timestamp]
-                if tag == 'ROUND_DURATION':
-                    server.rounds[round_id].round_duration = float(extras[0])
                 if tag == 'END_ROUND':
+                    server.rounds[round_id].events[tag] = [timestamp]
                     round_id = round_id + 1
 
         # 2. Leitura dos arquivos de log dos clientes
@@ -220,7 +235,6 @@ def read_spn_logs(spn_logs_path):
 
                     with open(filepath, 'r') as f:
                         round_id = 0
-                        round_time_init = 0
                         client = Client(client_id)
                         experiment.clients.append(client)
                         for line in f:
@@ -228,7 +242,6 @@ def read_spn_logs(spn_logs_path):
                             if tag == 'T_ARRIVAL':
                                 client.t_arrival = timestamp
                             if tag == 'START_ROUND':
-                                round_time_init =timestamp
                                 round_id = int(extras[0])
                                 client_round = Round(round_id)
                                 client.rounds.append(client_round)
@@ -244,7 +257,7 @@ def read_spn_logs(spn_logs_path):
                             if tag == 'T_RETURN_1':
                                 client.rounds[round_id].events[tag] = [timestamp]
                             if tag == 'END_ROUND':
-                                client.rounds[round_id].round_duration = timestamp - round_time_init
+                                client.rounds[round_id].events[tag] = [timestamp]
 
     else:
         return None

@@ -1,0 +1,69 @@
+- Premissa básica: manter o esquema de construção da rede o estilo mininet, como é feito no exemplo basic.py
+
+- Reforçar o uso de OO
+-- Criar uma classe base Server
+--- O usuário não deve criar sua própria classe filha server, mas somente definir classes filhas de seleção de clientes
+e agregador, passando as mesmas para o Server na hora da definição da topologia da rede. Há algum caso em que seria
+necessário
+-- Criar uma classe base Client
+-- Criar uma classe base Aggregator
+--- Agregadores já prontos e parte do mininetfed
+-- Criar uma classe base ClientSelection
+--- Algumas formas de Seleção de clientes já prontos e parte do mininetfed
+-- Usuários devem sempre herdar dessas classes e implementar métodos abstratos definidos nas classes bases.
+-- O usuário deve ser capaz de executar o FL definindo somente uma classe filha de Client, onde terá a definição do
+modelo, fit, update_metrics, etc.
+-- Definir tipos de parâmetros e retornos quando os métodos fizerem parte da comunicação cliente/servidor. Por exemplo,
+ao realizar o treinamento no cliente, deve sempre retornar um tipo específico que seja compatível com o esperado pelo
+servidor
+
+- O fluxo de execução presente em example deve fazer parte do core do mininetfed. Da forma como está hj, cada usuário
+pode fazer um fluxo totalmente diferente.
+
+- Em testes realizados, aparentemente o tempo de envio das mensagens via mqtt cresce de forma proporcional ao número de
+clientes. Isso indica que o mosquito trata o envio de mensagens de forma sequencial. É possível melhorar isso com uso de
+multithread? Há alguma conf que possamos fazer no mosquito?
+
+- Os arquivos de log hoje são separados em duas pastas desconexas (experiments e client_logs). Ainda, as permissões ao
+criar alguns arquivos e pastas exigem sudo.
+-- Uma única pasta para o experimento, com uma subpasta client_logs
+-- permissões de forma que o usuário não precise de sudo para alterar ou excluir a pasta
+-- esquema de nomenclatura de acordo com a hora e data do experimento, de forma a evitar colisão
+
+- Ao iniciar o experimento, verificar se os scripts definidos pelo usuário não foram alterados. Se sim, reconstruir as
+imagens docker.
+-- Ideal: usuario não deve precisar rodar o create_images.sh
+
+- Métricas
+-- Gerar as métricas e salvar dentro da pasta de experiments definida pelo usuário
+-- Raug do André Pacheco
+-- gerar gráficos de confusão, curvas ROC, learning rate? seria necessário adicionar matplotlib como dependência. Talvez
+apenas salvar os dados crus e fazer um script a parte para gerar os gráficos, fora do core do mininetfed.
+
+- Salvamento do modelo
+-- Salvar o modelo a cada rodada dentro do arquivo last.model
+-- Salvar o melhor modelo dentro de best.model
+-- colocar o salvamento como uma thread separada para minimizar o impacto no desempenho do FL
+
+- Resume
+-- criar a possibilidade de reiniciar o treinamento caso de pau
+-- por isso a necessidade do last.model
+-- Ao criar um experimento, permitir que se passe a opção resume=True e uma pasta onde os logs e resultados
+parciais do experimento já existem da execução que deu pau
+
+- Dados de treinamento utilizados em cada cliente
+-- Atualmente existem classes trainers onde o método split_data é responsável tanto pelo split dos dados entre clientes
+qto split de dados em treinamento e teste.
+-- trainerMNIST.py por exemplo escolhe aleatoriamente uma certa quantidade de samples que será usada por aquele cliente,
+para então realizar o split entre dados de treinamento e teste. Isso significa que diferentes clientes podem estar
+usando dados iguais ou que certos dados podem nunca ser usados por qualquer cliente.
+-- Idealmente, cada cliente deveria ter seu próprio conjunto de dados separados, simulando a situação real.
+-- Sugestão:
+--- o split de dados deve ser feito pelo próprio usuário
+--- Ao construir um cliente, o usuário deve indicar qual pasta deve ser usada pelo cliente para obter os dados
+--- Cada cliente deve ter seu próprio volume da imagem docker, onde os dados estarão presentes? (conflita com a ideia de
+ter todos os logs/resultados do experimento centralizados em uma única pasta)
+--- split_data deve ser usado apenas para realizar o split de dados em treinamento e teste, assim como é feito em um
+treinamento sem FL
+--- Criar um script python para automatizar o split de dados entre clientes. O script poderia aceitar parâmetros como
+proporção de dados em cada cliente, se o split seguiria algum critério como respeitar a proporção de classes...
