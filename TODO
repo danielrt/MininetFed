@@ -41,9 +41,10 @@ imagens docker.
 apenas salvar os dados crus e fazer um script a parte para gerar os gráficos, fora do core do mininetfed.
 
 - Salvamento do modelo
--- Salvar o modelo a cada rodada dentro do arquivo last.model
--- Salvar o melhor modelo dentro de best.model
--- colocar o salvamento como uma thread separada para minimizar o impacto no desempenho do FL
+-- Salvar o modelo a cada rodada dentro do arquivo last.model.
+-- Salvar o melhor modelo dentro de best.model.
+-- colocar o salvamento como uma thread separada para minimizar o impacto no desempenho do FL.
+-- Implementar política de parada do treinamento: se não houver melhorar nos últimos 10 rounds, parar.
 
 - Resume
 -- criar a possibilidade de reiniciar o treinamento caso de pau
