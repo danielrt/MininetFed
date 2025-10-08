@@ -5,7 +5,7 @@ import stat
 from pathlib import Path
 from datetime import datetime
 
-from federated.node import VOLUME_FOLDER
+from core.node import VOLUME_FOLDER
 
 
 class Experiment:

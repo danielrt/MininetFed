@@ -1,8 +1,8 @@
 from containernet.net import Containernet
 from containernet.cli import CLI
 
-from federated.node import Broker, AutoStop, AutoStop6
-from federated.experiment import Experiment
+from core.node import Broker, AutoStop, AutoStop6
+from core.experiment import Experiment
 
 from mn_wifi.sixLoWPAN.link import LoWPAN
 

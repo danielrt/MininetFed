@@ -1,5 +1,4 @@
 import os
-import shlex
 import time
 import json
 
@@ -11,7 +10,7 @@ try:
 except:
     from mininet.term import makeTerm
 
-from federated.external_broker import ExtBroker
+from core.external_broker import ExtBroker
 
 VOLUME_FOLDER = 'flw'
 CPU_PERIOD = 100000
