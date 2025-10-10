@@ -1,6 +1,8 @@
+import logging
 import time
 from abc import abstractmethod
 
+import numpy as np
 from numpy import ndarray
 import paho.mqtt.client as mqtt
 import json
@@ -12,7 +14,7 @@ from fed.training_response import TrainingResponse
 
 
 class Server:
-    def __init__(self, broker_addr):
+    def __init__(self, broker_addr, experiments_result_folder, **server_args):
         self.fed_clients = []
 
         # connect on queue
@@ -23,6 +25,49 @@ class Server:
         client_mqtt.message_callback_add('minifed/preAggQueue', self.on_message_agg)
         client_mqtt.message_callback_add('minifed/metricsQueue', self.on_message_metrics)
         client_mqtt.message_callback_add('minifed/ready', self.on_message_ready)
+
+        self.server_args = server_args
+        self.broker_addr = broker_addr
+        self.saved_model_file = f'{experiments_result_folder}/best.model'
+        self.min_trainers = server_args["min_trainers"]
+        self.nun_rounds = server_args["num_rounds"]
+        self.stop_acc = server_args["stop_acc"]
+        self.client_args = server_args.get("client")
+        self.metricType = {"infotype": "METRIC"}
+        self.executionType = {"infotype": "EXECUT"}
+
+        FORMAT = "%(asctime)s - %(infotype)-6s - %(levelname)s - %(message)s"
+        # logging.basicConfig(level=logging.INFO, filename=log_file,
+        #                    format=FORMAT, filemode="w")
+        # logger = logging.getLogger(__name__)
+
+        # logger geral
+        log_file = f'{experiments_result_folder}/server.log'
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.INFO)
+        h_general = logging.FileHandler(filename=log_file, mode="w")
+        h_general.setFormatter(logging.Formatter(FORMAT))
+        self.logger.addHandler(h_general)
+
+        # logger spnfl (artigo https://sol.sbc.org.br/index.php/sbrc/article/view/35122/34913)
+        spnfl_log_file = f'{experiments_result_folder}/spn.log'
+        FORMAT_SPNFL = "%(asctime)s - %(message)s"
+        self.spnfl_logger = logging.getLogger("spnfl")
+        self.spnfl_logger.setLevel(logging.INFO)
+        self.spnfl_logger.propagate = False  # não manda para os handlers do "myapp"
+        h_spnfl = logging.FileHandler(spnfl_log_file, mode="w")
+        h_spnfl.setFormatter(logging.Formatter(FORMAT_SPNFL))
+        self.spnfl_logger.addHandler(h_spnfl)
+
+        # class for coloring messages on terminal
+        class color:
+            BLUE = '\033[94m'
+            GREEN = '\033[92m'
+            YELLOW = '\033[93m'
+            RED = '\033[91m'
+            BOLD_START = '\033[1m'
+            BOLD_END = '\033[0m'
+            RESET = "\x1B[0m"
 
     # subscribe to queues on connection
     def on_connect(self, client, userdata, flags, rc):
@@ -37,24 +82,23 @@ class Server:
         client_id = m['id']
         self.fed_clients.append(ClientState(client_id))
 
-        spnfl_logger.info(f'T_ARRIVAL {m["id"]}')
-
     def on_message_register(self, client, userdata, message):
         m = json.loads(message.payload.decode("utf-8"))
-        controller.update_metrics(m["id"], m['metrics'])
-        logger.info(
-            f'trainer number {m["id"]} just joined the pool', extra=executionType)
+        for metric in m['metrics']:
+            self.fed_clients[m['id']].set_metric(metric, m['metrics'][metric])
+        self.logger.info(
+            f'trainer number {m["id"]} just joined the pool', extra=self.executionType)
         print(
             f'trainer number {m["id"]} just joined the pool')
 
         client.publish(
-            'minifed/serverArgs', json.dumps({"id": m["id"], "args": client_args}))
+            'minifed/serverArgs', json.dumps({"id": m["id"], "args": self.client_args}))
 
     # callback for preAggQueue: get weights of trainers, aggregate and send back
     def on_message_agg(self, client, userdata, message):
         m = json.loads(message.payload.decode("utf-8"))
 
-        spnfl_logger.info(f'T_RETURN_0 {m["id"]} {m["success"]}')
+        self.spnfl_logger.info(f'T_RETURN_0 {m["id"]} {m["success"]}')
 
         if m['success']:
             client_training_response = {}

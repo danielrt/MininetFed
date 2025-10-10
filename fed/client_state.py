@@ -2,7 +2,7 @@
 class ClientState:
     def __init__(self, client_id ):
         self.client_id = client_id
-        self.client_states = {}
+        self.client_metric = {}
         self.selected = False
         self.failed_training = False
 
@@ -15,8 +15,8 @@ class ClientState:
     def failed_in_last_training(self):
         return self.failed_training
 
-    def set_state(self, info, info_value):
-        self.client_states[info] = info_value
+    def set_metric(self, metric, metric_value):
+        self.client_metric[metric] = metric_value
 
-    def get_state(self, info):
-        return self.client_states[info]
+    def get_metric(self, metric):
+        return self.client_metric[metric]
