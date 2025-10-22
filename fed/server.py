@@ -27,7 +27,10 @@ class color:
 
 class Server:
     def __init__(self, broker_addr, experiments_result_folder, **server_args):
-        self.fed_clients : list[ClientState] = []
+        self.fed_clients : dict[str, ClientState] = {}
+        self.training_responses : list[TrainingResponse] = []
+        self.metrics_responses : list[MetricsResponse] = []
+        self.current_round = 0
 
         # connect on queue
         self.mqtt_client = mqtt.Client('server')
@@ -42,7 +45,7 @@ class Server:
         self.broker_addr = broker_addr
         self.saved_model_file = f'{experiments_result_folder}/best.model'
         self.min_trainers = server_args["min_trainers"]
-        self.nun_rounds = server_args["num_rounds"]
+        self.num_rounds = server_args["num_rounds"]
         self.stop_acc = server_args["stop_acc"]
         self.client_args = server_args.get("client")
         self.metricType = {"infotype": "METRIC"}
@@ -86,53 +89,52 @@ class Server:
     def on_message_ready(self, client, userdata, message):
         m = json.loads(message.payload.decode("utf-8"))
         client_id = m['id']
-        self.fed_clients.append(ClientState(client_id))
+        self.fed_clients[client_id] = ClientState(client_id)
 
     def on_message_register(self, client, userdata, message):
         m = json.loads(message.payload.decode("utf-8"))
+        fed_client_id = m['id']
         metrics = MetricsResponse.from_json(m['metrics'])
-        self.fed_clients[m['id']].update_metrics(metrics)
+        self.fed_clients[fed_client_id].set_metrics_for_round(self.current_round, metrics)
         self.logger.info(
-            f'trainer number {m["id"]} just joined the pool', extra=self.executionType)
+            f'trainer number {fed_client_id} just joined the pool', extra=self.executionType)
         print(
-            f'trainer number {m["id"]} just joined the pool')
+            f'trainer number {fed_client_id} just joined the pool')
 
         client.publish(
-            'minifed/serverArgs', json.dumps({"id": m["id"], "args": self.client_args}))
+            'minifed/serverArgs', json.dumps({"id": fed_client_id, "args": self.client_args}))
 
     # callback for preAggQueue: get weights of trainers, aggregate and send back
     def on_message_agg(self, client, userdata, message):
-        m = json.loads(message.payload.decode("utf-8"))
-        training_response = TrainingResponse(m["success"], m["weights"], m["num_samples"], m["training_args"])
-        self.fed_clients[m['id']].update_training_response(training_response)
-
-        self.spnfl_logger.info(f'T_RETURN_0 {m["id"]} {m["success"]}')
-        if m['success']:
+        training_response = TrainingResponse.from_json(message.payload.decode("utf-8"))
+        client_id = training_response.get_client_id()
+        was_success = training_response.was_success()
+        client_round_id = training_response.get_round_id()
+        response_status = was_success and client_round_id == self.current_round
+        self.fed_clients[client_id].set_training_status_for_round(self.current_round, response_status)
+        self.spnfl_logger.info(f'T_RETURN_0 {client_id} {was_success}')
+        if response_status:
+            self.training_responses.append(training_response)
+            self.fed_clients[client_id].set_training_status_for_round(client_round_id, True)
             self.logger.info(
-                f'received weights from trainer {m["id"]}!', extra=self.executionType)
-            print(f'received weights from trainer {m["id"]}!')
+                f'received weights from trainer {client_id}!', extra=self.executionType)
+            print(f'received weights from trainer {client_id}!')
         else:
-            print(f'client {m["id"]} failed in training!')
-
-
+            self.fed_clients[client_id].set_training_status_for_round(client_round_id, False)
+            print(f'client {client_id} failed in training or delivered response too late!')
 
     # callback for metricsQueue: get the metrics from each client after it finish its round
     def on_message_metrics(self, client, userdata, message):
-        m = json.loads(message.payload.decode("utf-8"))
-        controller.add_accuracy(m['metrics']['accuracy'])
-        controller.update_metrics(m["id"], m['metrics'])
-        m["metrics"]["client_name"] = m["id"]
-        self.logger.info(
-            f'{json.dumps(m["metrics"])}', extra=self.metricType)
-        controller.update_num_responses()
-
-        self.spnfl_logger.info(f'T_RETURN_1 {m["id"]}')
+        metric_response = MetricsResponse.from_json(message.payload.decode("utf-8"))
+        self.metrics_responses.append(metric_response)
+        self.fed_clients[metric_response.client_id].set_metrics_for_round(self.current_round, metric_response)
+        self.spnfl_logger.info(f'T_RETURN_1 {metric_response.get_client_id()}')
 
     @abstractmethod
     def configure(self, server_args : dict):
         pass
 
-    def aggregate(self, training_responses : dict[str, TrainingResponse]) -> list[ndarray]:
+    def aggregate(self, training_responses : list[TrainingResponse]) -> list[ndarray]:
         fed_avg = FedAvg()
         return fed_avg.aggregate(training_responses)
 
@@ -157,66 +159,68 @@ class Server:
         self.spnfl_logger.info("T_ARRIVAL_START")
 
         # wait trainers to connect
-        while controller.get_num_trainers() < min_trainers:
+        while len(self.fed_clients) < self.min_trainers:
             time.sleep(1)
 
-        self.spnfl_logger.info(f'T_ARRIVAL_END {min_trainers} {controller.get_num_trainers()}')
+        self.spnfl_logger.info(f'T_ARRIVAL_END {self.min_trainers} {len(self.fed_clients)}')
 
         # begin training
         selected_qtd = 0
         round_times = []  # lista para armazenar o tempo de cada round
-        while controller.get_current_round() != self.nun_rounds:
+        while self.current_round <= self.num_rounds:
             round_start_time = time.time()  # início do round
-            controller.update_current_round()
+            self.current_round += 1
+            self.training_responses = []
+            self.metrics_responses = []
             self.logger.info(
-                f'round: {controller.get_current_round()}', extra=metricType)
+                f'round: {self.current_round}', extra=self.metricType)
             print(color.RESET + '\n' + color.BOLD_START +
-                  f'starting round {controller.get_current_round()}' + color.BOLD_END)
+                  f'starting round {self.current_round}' + color.BOLD_END)
 
-            self.spnfl_logger.info(f'START_ROUND {controller.get_current_round() - 1}')
+            self.spnfl_logger.info(f'START_ROUND {self.current_round - 1}')
 
             self.spnfl_logger.info(f'T_SELECT_START')
 
             # select trainers for round
-            trainer_list = controller.get_trainer_list()
-            if not trainer_list:
-                self.logger.critical("Client's list empty", extra=executionType)
-            select_trainers = self.select_clients(trainer_list)
-            selected_qtd = len(select_trainers)
+            if len(self.fed_clients) == 0:
+                self.logger.critical("Client's list empty", extra=self.executionType)
 
-            self.logger.info(f"n_selected: {len(select_trainers)}", extra=metricType)
+            all_fed_clients = list(self.fed_clients.values())
+            selected_fed_clients = self.select_clients(all_fed_clients)
+
+            self.logger.info(f"n_selected: {len(selected_fed_clients)}", extra=self.metricType)
             self.logger.info(
-                f"{json.dumps({'selected_trainers': select_trainers})}", extra=metricType)
-            for t in trainer_list:
-                if t in select_trainers:
+                f"{json.dumps({'selected_trainers': selected_fed_clients})}", extra=self.metricType)
+            for fed_client in all_fed_clients:
+                fed_client_id = fed_client.get_client_id()
+                if  fed_client_id in selected_fed_clients:
                     # logger.info(
                     #     f'selected: {t}', extra=metricType)
                     print(
-                        f'selected trainer {t} for training on round {self.current_round}')
-                    m = json.dumps({'id': t, 'selected': True}).replace(' ', '')
+                        f'selected trainer {fed_client_id} for training on round {self.current_round}')
+                    m = json.dumps({'id': fed_client_id, 'selected': True, 'round_id' : self.current_round}).replace(' ', '')
                     self.mqtt_client.publish('minifed/selectionQueue', m)
-                    self.spnfl_logger.info(f'T_SELECT {t} True')
+                    self.spnfl_logger.info(f'T_SELECT {fed_client_id} True')
                 else:
                     # logger.info(
                     #     f'NOT_selected: {t}', extra=metricType)
-                    m = json.dumps({'id': t, 'selected': False}).replace(' ', '')
+                    m = json.dumps({'id': fed_client_id, 'selected': False, 'round_id' : self.current_round}).replace(' ', '')
                     self.mqtt_client.publish('minifed/selectionQueue', m)
-                    self.spnfl_logger.info(f'T_SELECT {t} False')
+                    self.spnfl_logger.info(f'T_SELECT {fed_client_id} False')
 
-            self.spnfl_logger.info(f'T_SELECT_END {selected_qtd}')
+            self.spnfl_logger.info(f'T_SELECT_END {len(selected_fed_clients)}')
 
             self.spnfl_logger.info(f'T_RETURN_0_START')
 
             # wait for agg responses
-            while controller.get_num_responses() != selected_qtd:
+            while len(self.training_responses) < selected_qtd:
                 time.sleep(1)
-            self.spnfl_logger.info(f'T_RETURN_0_END {controller.get_num_responses()}')
-            controller.reset_num_responses()  # reset num_responses for next round
+            self.spnfl_logger.info(f'T_RETURN_0_END {len(self.training_responses)}')
 
             self.spnfl_logger.info(f'T_AGGREG_START')
 
             # aggregate and send
-            agg_response = controller.agg_weights()
+            agg_response = self.aggregate(self.training_responses)
             response = json.dumps({'agg_response': agg_response}, default=default)
 
             self.spnfl_logger.info(f'T_AGGREG_END')
@@ -232,14 +236,13 @@ class Server:
             self.spnfl_logger.info(f'T_RETURN_1_START')
 
             # wait for metrics response
-            while controller.get_num_responses() != controller.get_num_trainers():
+            while len(self.metrics_responses) < len(selected_fed_clients):
                 time.sleep(1)
-            self.spnfl_logger.info(f'T_RETURN_1_END {controller.get_num_responses()}')
+            self.spnfl_logger.info(f'T_RETURN_1_END {len(self.metrics_responses)}')
 
             # spnfl_logger.info(f'T_COMPUTE_START')
-            controller.reset_num_responses()  # reset num_responses for next round
             mean_acc = controller.get_mean_acc()
-            self.logger.info(f'mean_accuracy: {mean_acc}\n', extra=metricType)
+            self.logger.info(f'mean_accuracy: {mean_acc}\n', extra=self.metricType)
             print(color.GREEN +
                   f'mean accuracy on round {controller.get_current_round()} was {mean_acc}\n' + color.RESET)
 
@@ -248,7 +251,7 @@ class Server:
             round_duration = round_end_time - round_start_time
             round_times.append(round_duration)
             rounds_done = controller.get_current_round()
-            rounds_left = self.nun_rounds - rounds_done
+            rounds_left = self.num_rounds - rounds_done
             if rounds_done > 0 and rounds_left > 0:
                 avg_time = sum(round_times) / len(round_times)
                 est_remaining = avg_time * rounds_left

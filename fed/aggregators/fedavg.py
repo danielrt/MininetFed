@@ -5,13 +5,13 @@ from fed.aggregators.aggregator import Aggregator
 from fed.training_response import TrainingResponse
 
 class FedAvg(Aggregator):
-    def aggregate(self, training_responses: dict[str, TrainingResponse]) -> list[ndarray]:
+    def aggregate(self, training_responses: list[TrainingResponse]) -> list[ndarray]:
         all_trainer_samples = []
         all_weights = []
-        for client_id in training_responses:
+        for training_response in training_responses:
             all_trainer_samples.append(
-                training_responses[client_id].num_samples)
-            all_weights.append(training_responses[client_id].weights)
+                training_response.get_num_samples())
+            all_weights.append(training_response.get_weights())
 
         scaling_factor = list(np.array(all_trainer_samples) /
                               np.array(all_trainer_samples).sum())
