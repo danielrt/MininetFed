@@ -11,8 +11,8 @@ import json
 from fed.aggregators.fedavg import FedAvg
 from fed.client_selectors.all_clients_selector import AllClientsSelector
 from fed.client_state import ClientState
-from fed.metrics_response import MetricsResponse
-from fed.training_response import TrainingResponse
+from fed.client_metrics import ClientMetrics, MetricType
+from fed.client_training_data import ClientTrainingData
 
 
 # class for coloring messages on terminal
@@ -26,11 +26,19 @@ class color:
     RESET = "\x1B[0m"
 
 class Server:
-    def __init__(self, broker_addr, experiments_result_folder, **server_args):
+    def __init__(self, broker_addr, experiments_result_folder):
+        self.broker_addr = broker_addr
+        self.saved_model_file = f'{experiments_result_folder}/best.model'
+
         self.fed_clients : dict[str, ClientState] = {}
-        self.training_responses : list[TrainingResponse] = []
-        self.metrics_responses : list[MetricsResponse] = []
-        self.current_round = 0
+        self.training_responses : list[ClientTrainingData] = []
+        self.metrics_responses : list[ClientMetrics] = []
+        self.current_round = 1
+        self.accuracies_by_round = []
+        self.best_acc = 0
+        self.no_improvement_counter = 0
+        self.last_model = None
+        self.best_model = None
 
         # connect on queue
         self.mqtt_client = mqtt.Client('server')
@@ -41,42 +49,31 @@ class Server:
         self.mqtt_client.message_callback_add('minifed/metricsQueue', self.on_message_metrics)
         self.mqtt_client.message_callback_add('minifed/ready', self.on_message_ready)
 
-        self.server_args = server_args
-        self.broker_addr = broker_addr
-        self.saved_model_file = f'{experiments_result_folder}/best.model'
-        self.min_trainers = server_args["min_trainers"]
-        self.num_rounds = server_args["num_rounds"]
-        self.stop_acc = server_args["stop_acc"]
-        self.client_args = server_args.get("client")
+        self.server_args = None
+        self.num_rounds = 0
+        self.min_trainers = 0
         self.metricType = {"infotype": "METRIC"}
         self.executionType = {"infotype": "EXECUT"}
 
-        self.current_round = 0
 
-        FORMAT = "%(asctime)s - %(infotype)-6s - %(levelname)s - %(message)s"
-        # logging.basicConfig(level=logging.INFO, filename=log_file,
-        #                    format=FORMAT, filemode="w")
-        # logger = logging.getLogger(__name__)
-
-        # logger geral
+        # general logger
+        log_format = "%(asctime)s - %(infotype)-6s - %(levelname)s - %(message)s"
         log_file = f'{experiments_result_folder}/server.log'
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)
         h_general = logging.FileHandler(filename=log_file, mode="w")
-        h_general.setFormatter(logging.Formatter(FORMAT))
+        h_general.setFormatter(logging.Formatter(log_format))
         self.logger.addHandler(h_general)
 
-        # logger spnfl (artigo https://sol.sbc.org.br/index.php/sbrc/article/view/35122/34913)
+        # spnfl logger (https://sol.sbc.org.br/index.php/sbrc/article/view/35122/34913)
         spnfl_log_file = f'{experiments_result_folder}/spn.log'
-        FORMAT_SPNFL = "%(asctime)s - %(message)s"
+        spnfl_format_logger = "%(asctime)s - %(message)s"
         self.spnfl_logger = logging.getLogger("spnfl")
         self.spnfl_logger.setLevel(logging.INFO)
         self.spnfl_logger.propagate = False  # não manda para os handlers do "myapp"
         h_spnfl = logging.FileHandler(spnfl_log_file, mode="w")
-        h_spnfl.setFormatter(logging.Formatter(FORMAT_SPNFL))
+        h_spnfl.setFormatter(logging.Formatter(spnfl_format_logger))
         self.spnfl_logger.addHandler(h_spnfl)
-
-
 
     # subscribe to queues on connection
     def on_connect(self, client, userdata, flags, rc):
@@ -94,7 +91,7 @@ class Server:
     def on_message_register(self, client, userdata, message):
         m = json.loads(message.payload.decode("utf-8"))
         fed_client_id = m['id']
-        metrics = MetricsResponse.from_json(m['metrics'])
+        metrics = ClientMetrics.from_json(m['metrics'])
         self.fed_clients[fed_client_id].set_metrics_for_round(self.current_round, metrics)
         self.logger.info(
             f'trainer number {fed_client_id} just joined the pool', extra=self.executionType)
@@ -106,7 +103,7 @@ class Server:
 
     # callback for preAggQueue: get weights of trainers, aggregate and send back
     def on_message_agg(self, client, userdata, message):
-        training_response = TrainingResponse.from_json(message.payload.decode("utf-8"))
+        training_response = ClientTrainingData.from_json(message.payload.decode("utf-8"))
         client_id = training_response.get_client_id()
         was_success = training_response.was_success()
         client_round_id = training_response.get_round_id()
@@ -125,22 +122,54 @@ class Server:
 
     # callback for metricsQueue: get the metrics from each client after it finish its round
     def on_message_metrics(self, client, userdata, message):
-        metric_response = MetricsResponse.from_json(message.payload.decode("utf-8"))
+        metric_response = ClientMetrics.from_json(message.payload.decode("utf-8"))
         self.metrics_responses.append(metric_response)
         self.fed_clients[metric_response.client_id].set_metrics_for_round(self.current_round, metric_response)
         self.spnfl_logger.info(f'T_RETURN_1 {metric_response.get_client_id()}')
 
-    @abstractmethod
     def configure(self, server_args : dict):
-        pass
-
-    def aggregate(self, training_responses : list[TrainingResponse]) -> list[ndarray]:
-        fed_avg = FedAvg()
-        return fed_avg.aggregate(training_responses)
+        self.server_args = server_args
+        is_overridden = type(self).configure is not Server.configure
+        required = {"min_trainers", "num_rounds", }
+        if not is_overridden:
+            required.add("stop_a")
+        missing = required - server_args.keys()
+        if missing:
+            raise RuntimeError(f"The following server configurations should be provided: {missing}")
+        else:
+            self.num_rounds = server_args["num_rounds"]
+            self.min_trainers = server_args["min_trainers"]
 
     def select_clients(self, clients_states : list[ClientState]) -> list[str]:
         return AllClientsSelector().select_clients(clients_states)
 
+    def aggregate(self, training_responses : list[ClientTrainingData]) -> list[ndarray]:
+        fed_avg = FedAvg()
+        return fed_avg.aggregate(training_responses)
+
+    def stop_condition(self, clients_metrics : list[ClientMetrics]) -> bool:
+        accuracies = []
+        for client_metrics in clients_metrics:
+            accuracies.append(client_metrics.get_metric(MetricType.ACCURACY))
+        mean_acc = float(np.mean(np.array(accuracies)))
+        self.logger.info(f'mean_accuracy: {mean_acc}\n', extra=self.metricType)
+        print(color.GREEN +
+              f'mean accuracy on round {self.current_round} was {mean_acc}\n' + color.RESET)
+        self.accuracies_by_round.append(mean_acc)
+        if "stop_acc" in self.server_args["stop_acc"]:
+            stop_acc = self.server_args["stop_acc"]
+            if mean_acc >= stop_acc:
+                return True
+            else:
+                if mean_acc >= self.best_acc:
+                    self.best_acc = mean_acc
+                    self.best_model = self.last_model
+                else:
+                    self.no_improvement_counter += 1
+                    if "early_stop" in self.server_args:
+                        if self.no_improvement_counter >= self.server_args["early_stop"]:
+                            return True
+        return False
 
     def run(self):
         # start loop
@@ -220,8 +249,11 @@ class Server:
             self.spnfl_logger.info(f'T_AGGREG_START')
 
             # aggregate and send
-            agg_response = self.aggregate(self.training_responses)
-            response = json.dumps({'agg_response': agg_response}, default=default)
+            self.last_model = self.aggregate(self.training_responses)
+
+            # save partial model here
+
+            response = json.dumps({'agg_response': self.last_model})
 
             self.spnfl_logger.info(f'T_AGGREG_END')
 
@@ -240,59 +272,59 @@ class Server:
                 time.sleep(1)
             self.spnfl_logger.info(f'T_RETURN_1_END {len(self.metrics_responses)}')
 
+            clients_metrics = []
+            for fed_client in self.fed_clients.values():
+                clients_metrics.append(fed_client.get_metrics_for_round(self.current_round))
+
             # spnfl_logger.info(f'T_COMPUTE_START')
-            mean_acc = controller.get_mean_acc()
-            self.logger.info(f'mean_accuracy: {mean_acc}\n', extra=self.metricType)
-            print(color.GREEN +
-                  f'mean accuracy on round {controller.get_current_round()} was {mean_acc}\n' + color.RESET)
+
+            stop_fed = self.stop_condition(clients_metrics)
 
             # calcular tempo do round e estimar tempo restante
             round_end_time = time.time()
             round_duration = round_end_time - round_start_time
             round_times.append(round_duration)
-            rounds_done = controller.get_current_round()
-            rounds_left = self.num_rounds - rounds_done
-            if rounds_done > 0 and rounds_left > 0:
+            rounds_left = self.num_rounds - self.current_round
+            if self.current_round > 0 and rounds_left > 0:
                 avg_time = sum(round_times) / len(round_times)
                 est_remaining = avg_time * rounds_left
                 mins, secs = divmod(int(est_remaining), 60)
                 print(
                     color.BLUE + f"Estimated time remaining until the end of the experiment: {mins}m {secs}s" + color.RESET)
 
-            self.spnfl_logger.info(f'T_SAVE_START')
-            if mean_acc >= best_acc:
-                best_model = controller.get_global_model()
-                best_acc = mean_acc
-            self.spnfl_logger.info(f'T_SAVE_END')
+            #self.spnfl_logger.info(f'T_SAVE_START')
+            #if mean_acc >= best_acc:
+            #    best_model = controller.get_global_model()
+            #    best_acc = mean_acc
+            #self.spnfl_logger.info(f'T_SAVE_END')
 
             # spnfl_logger.info(f'ROUND_DURATION {round_duration}')
 
             # update stop queue or continue process
-            if mean_acc >= self.stop_acc:
+            if stop_fed:
                 with open(self.saved_model_file, "w", encoding="utf-8") as f:
                     json.dump(best_model, f, ensure_ascii=False, indent=2)
                 # spnfl_logger.info(f'T_SAVE_END')
 
-                self.logger.info('stop_condition: accuracy', extra=metricType)
+                self.logger.info('stop_condition: accuracy', extra=self.metricType)
                 print(color.RED + f'accuracy threshold met! stopping the training!')
                 m = json.dumps({'stop': True})
                 self.mqtt_client.publish('minifed/stopQueue', m)
                 time.sleep(1)  # time for clients to finish
                 # spnfl_logger.info(f'T_COMPUTE_END')
-                self.spnfl_logger.info(f'END_ROUND {controller.get_current_round()}')
+                self.spnfl_logger.info(f'END_ROUND {self.current_round}')
                 exit()
 
             # spnfl_logger.info(f'T_SAVE_END')
-            controller.reset_acc_list()
             # spnfl_logger.info(f'T_COMPUTE_END')
-            self.spnfl_logger.info(f'END_ROUND {controller.get_current_round()}')
+            self.spnfl_logger.info(f'END_ROUND {self.current_round}')
 
         # spnfl_logger.info(f'T_SAVE_START')
         with open(self.saved_model_file, "w", encoding="utf-8") as f:
-            json.dump(best_model, f, ensure_ascii=False, indent=2)
+            json.dump(self.best_model, f, ensure_ascii=False, indent=2)
         # spnfl_logger.info(f'T_SAVE_END')
 
-        self.logger.info('stop_condition: rounds', extra=metricType)
+        self.logger.info('stop_condition: rounds', extra=self.metricType)
         print(color.RED + f'rounds threshold met! stopping the training!' + color.RESET)
         self.mqtt_client.publish('minifed/stopQueue', m)
         self.mqtt_client.loop_stop()

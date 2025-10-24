@@ -1,13 +1,15 @@
-from fed.metrics_response import MetricsResponse
-from fed.training_response import TrainingResponse
+import numpy as np
+
+from fed.client_metrics import ClientMetrics, MetricType
+from fed.client_training_data import ClientTrainingData
 
 
 class ClientState:
     def __init__(self, client_id):
         self.client_id = client_id
-        self.metrics = []
-        self.selected = []
-        self.training_status = []
+        self.metrics : list[ClientMetrics] = []
+        self.selected : list[bool] = []
+        self.training_status : list[bool] = []
 
     def get_client_id(self):
         return self.client_id
@@ -40,9 +42,9 @@ class ClientState:
     def get_training_status_for_all_rounds(self):
         return self.training_status
 
-    def set_metrics_for_round(self, round_id : int, metrics : MetricsResponse):
+    def set_metrics_for_round(self, round_id : int, metrics : ClientMetrics):
         for i in range(len(self.metrics), round_id):
-            self.metrics.append(False)
+            self.metrics.append(None)
         self.metrics.append(metrics)
 
     def get_metrics_for_round(self, round_id : int):
@@ -53,3 +55,4 @@ class ClientState:
 
     def get_metrics_for_all_rounds(self):
         return self.metrics
+

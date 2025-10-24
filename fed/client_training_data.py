@@ -3,7 +3,7 @@ from typing import Any
 
 from numpy import ndarray
 
-class TrainingResponse:
+class ClientTrainingData:
     def __init__(self, client_id : str, success : bool, round_id : int, weights : list[ndarray], num_samples : int, training_args : dict[str, Any]):
         self.client_id = client_id
         self.success = success
