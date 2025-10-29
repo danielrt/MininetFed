@@ -1,12 +1,18 @@
 import json
 from enum import Enum
-from typing import Any
+from typing import Any, TypeAlias, Union
 
-class MetricType():
+JSONSerializableType: TypeAlias = Union[
+    None, bool, int, float, str,
+    list["JSONSerializableType"],
+    dict[str, "JSONSerializableType"],
+]
+
+class MetricType:
     ACCURACY = "accuracy"
 
 class ClientMetrics:
-    def __init__(self, client_id : str, metrics : dict[str, Any]):
+    def __init__(self, client_id : str, metrics : dict[str, JSONSerializableType]):
         self.client_id = client_id
         self.metrics = metrics
 
@@ -23,8 +29,8 @@ class ClientMetrics:
     def get_client_id(self) -> str:
         return self.client_id
 
-    def get_all_metrics(self) -> dict[str, Any]:
+    def get_all_metrics(self) -> dict[str, JSONSerializableType]:
         return self.metrics
 
-    def get_metric(self, metric_name : str):
+    def get_metric(self, metric_name : str) -> JSONSerializableType:
         return self.metrics[metric_name]

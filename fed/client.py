@@ -8,6 +8,7 @@ from numpy import ndarray
 from paho import mqtt
 
 from fed.client_metrics import ClientMetrics
+from fed.dataset_info import DatasetInfo
 
 
 class Color:
@@ -27,13 +28,15 @@ class Client:
         self.spnfl_logger = None
         self.mqtt_client = None
         self.stop = False
+        self.dataset_info = None
 
     @abstractmethod
     def configure(self, client_args: dict):
         pass
 
+    """ Retorna o numero de samples do dataset"""
     @abstractmethod
-    def prepare_data(self, path_to_data : str):
+    def prepare_data(self, path_to_data : str) -> DatasetInfo:
         pass
 
     @abstractmethod
@@ -79,7 +82,7 @@ class Client:
         h_spnfl.setFormatter(logging.Formatter(format_spnfl))
         self.spnfl_logger.addHandler(h_spnfl)
 
-        self.split_data(self.client_folder)
+        self.num_samples = self.prepare_data(self.client_folder)
 
     # subscribe to queues on connection
     def on_connect(self, client, userdata, flags, rc):
@@ -94,8 +97,6 @@ class Client:
     the client trains and send the training results back.
     """
     def on_message_selection(self, client, userdata, message):
-        global selected
-        global n_round
         msg = json.loads(message.payload.decode("utf-8"))
         client_id = msg['id']
         selected = bool(msg['selected'])
@@ -104,7 +105,6 @@ class Client:
             self.spnfl_logger.info(f'START_ROUND {round_id}')
             if selected:
                 self.spnfl_logger.info(f'T_SELECT True')
-                selected = True
                 print(Color.BOLD_START + '[{}] new round starting'.format(round_id) + Color.BOLD_END)
                 print(
                     f'client was selected for training this round and will start training!')
@@ -167,9 +167,7 @@ class Client:
 
         self.spnfl_logger.info("INIT_EXPERIMENT")
 
-        client_metrics = self.evaluate()
-
-        self.mqtt_client.publish('minifed/registerQueue', client_metrics.to_json())
+        self.mqtt_client.publish('minifed/registerQueue', self.dataset_info.to_json())
         self.spnfl_logger.info(f'T_ARRIVAL')
         print(Color.BOLD_START +
               f'trainer {self.client_id} connected!\n' + Color.BOLD_END)

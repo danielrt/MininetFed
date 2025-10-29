@@ -13,6 +13,7 @@ from fed.client_selectors.all_clients_selector import AllClientsSelector
 from fed.client_state import ClientState
 from fed.client_metrics import ClientMetrics, MetricType
 from fed.client_training_data import ClientTrainingData
+from fed.dataset_info import DatasetInfo
 
 
 # class for coloring messages on terminal
@@ -107,11 +108,10 @@ class Server:
             self.mqtt_client.subscribe(s)
 
     def on_message_register(self, client, userdata, message):
-        m = json.loads(message.payload.decode("utf-8"))
-        fed_client_id = m['id']
+        dataset_info = DatasetInfo.from_json(message.payload.decode("utf-8"))
+        fed_client_id = dataset_info.get_client_id()
         self.fed_clients[fed_client_id] = ClientState(fed_client_id)
-        metrics = ClientMetrics.from_json(m['metrics'])
-        self.fed_clients[fed_client_id].set_metrics_for_round(self.current_round, metrics)
+        self.fed_clients[fed_client_id].set_dataset_info(dataset_info)
         self.logger.info(
             f'trainer number {fed_client_id} just joined the pool', extra=self.executionType)
         print(

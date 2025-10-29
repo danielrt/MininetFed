@@ -2,24 +2,32 @@ import numpy as np
 
 from fed.client_metrics import ClientMetrics, MetricType
 from fed.client_training_data import ClientTrainingData
+from fed.dataset_info import DatasetInfo
 
 
 class ClientState:
     def __init__(self, client_id):
         self.client_id = client_id
-        self.metrics : list[ClientMetrics] = []
+        self.dataset_info : DatasetInfo = None
+        self.metrics : list[ClientMetrics | None] = []
         self.selected : list[bool] = []
         self.training_status : list[bool] = []
 
-    def get_client_id(self):
+    def get_client_id(self) -> str:
         return self.client_id
+
+    def set_dataset_info(self, dataset_info):
+        self.dataset_info = dataset_info
+
+    def get_dataset_info(self) -> DatasetInfo:
+        return self.dataset_info
 
     def set_selection_for_round(self, round_id : int,  selected : bool):
         for i in range(len(self.selected), round_id):
             self.selected.append(False)
         self.selected[round_id] = selected
 
-    def was_selected_for_round(self, round_id : int):
+    def was_selected_for_round(self, round_id : int) -> bool:
         if round_id < len(self.selected):
             return self.selected[round_id]
         else:
@@ -39,7 +47,7 @@ class ClientState:
         else:
             return None
 
-    def get_training_status_for_all_rounds(self):
+    def get_training_status_for_all_rounds(self) -> list[bool]:
         return self.training_status
 
     def set_metrics_for_round(self, round_id : int, metrics : ClientMetrics):
@@ -47,12 +55,12 @@ class ClientState:
             self.metrics.append(None)
         self.metrics.append(metrics)
 
-    def get_metrics_for_round(self, round_id : int):
+    def get_metrics_for_round(self, round_id : int) -> ClientMetrics | None:
         if round_id < len(self.metrics):
             return self.metrics[round_id]
         else:
             return None
 
-    def get_metrics_for_all_rounds(self):
+    def get_metrics_for_all_rounds(self) -> list[ClientMetrics]:
         return self.metrics
 
