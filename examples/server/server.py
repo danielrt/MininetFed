@@ -310,7 +310,7 @@ def server():
 
     logger.info('stop_condition: rounds', extra=metricType)
     print(color.RED + f'rounds threshold met! stopping the training!' + color.RESET)
-    client.publish('minifed/stopQueue', m)
+    client.publish('minifed/stopQueue', None)
     client.loop_stop()
 
 

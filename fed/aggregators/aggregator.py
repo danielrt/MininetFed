@@ -8,5 +8,5 @@ from fed.client_training_data import ClientTrainingData
 class Aggregator:
 
     @abstractmethod
-    def aggregate(self, training_responses : dict[str, ClientTrainingData]) -> list[ndarray]:
+    def aggregate(self, training_responses : list[ClientTrainingData]) -> list[ndarray]:
         pass
