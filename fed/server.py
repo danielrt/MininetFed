@@ -9,11 +9,14 @@ import paho.mqtt.client as mqtt
 import json
 
 from fed.aggregators.fedavg import FedAvg
+from fed.client_acceptors.all_clients_acceptor import AllClientsAcceptor
+from fed.client_info import ClientInfo
 from fed.client_selectors.all_clients_selector import AllClientsSelector
 from fed.client_state import ClientState
-from fed.client_metrics import ClientMetrics, MetricType
-from fed.client_training_data import ClientTrainingData
+from fed.metrics import Metrics, MetricType
+from fed.training_data import TrainingData
 from fed.dataset_info import DatasetInfo
+from fed.utils import ndarray_to_base64
 
 
 # class for coloring messages on terminal
@@ -32,8 +35,8 @@ class Server:
         self.saved_model_file = ""
 
         self.fed_clients: dict[str, ClientState] = {}
-        self.training_responses: list[ClientTrainingData] = []
-        self.metrics_responses: list[ClientMetrics] = []
+        self.training_responses: list[TrainingData] = []
+        self.metrics_responses: list[Metrics] = []
         self.current_round = 1
         self.accuracies_by_round = []
         self.best_acc = 0
@@ -107,19 +110,36 @@ class Server:
         for s in subscribe_queues:
             self.mqtt_client.subscribe(s)
 
+    # callback for registerQueue: add trainer to the pool of trainers
+    def on_message_ready(self, client, userdata, message):
+        data_info = DatasetInfo.from_json(message.payload.decode("utf-8"))
+        client_id = data_info.get_client_id()
+        self.fed_clients[client_id].set_dataset_info(data_info)
+        self.spnfl_logger.info(f'T_ARRIVAL {m["id"]}')
+
     def on_message_register(self, client, userdata, message):
-        dataset_info = DatasetInfo.from_json(message.payload.decode("utf-8"))
-        fed_client_id = dataset_info.get_client_id()
-        self.fed_clients[fed_client_id] = ClientState(fed_client_id)
-        self.fed_clients[fed_client_id].set_dataset_info(dataset_info)
-        self.logger.info(
-            f'trainer number {fed_client_id} just joined the pool', extra=self.executionType)
-        print(
-            f'trainer number {fed_client_id} just joined the pool')
+        client_info = ClientInfo.from_json(message.payload.decode("utf-8"))
+        accepted = self.accept_client(client_info)
+        client_id = client_info.get_client_id()
+        if accepted:
+            self.fed_clients[client_id] = ClientState(client_id)
+            self.fed_clients[client_id].set_client_info(client_info)
+            self.logger.info(
+                f'trainer {client_id} was accepted to join the pool', extra=self.executionType)
+            print(
+                f'trainer {client_id} was accepted to join the pool')
+        else:
+            self.logger.info(
+                f'trainer {client_id} was denied to join the pool', extra=self.executionType)
+            print(
+                f'trainer number {client_id} was denied to join the pool')
+
+        client.publish(
+            'minifed/accept', json.dumps({"client_id": client_id, "accepted": accepted}))
 
     # callback for preAggQueue: get weights of trainers, aggregate and send back
     def on_message_agg(self, client, userdata, message):
-        training_response = ClientTrainingData.from_json(message.payload.decode("utf-8"))
+        training_response = TrainingData.from_json(message.payload.decode("utf-8"))
         client_id = training_response.get_client_id()
         was_success = training_response.was_success()
         client_round_id = training_response.get_round_id()
@@ -138,19 +158,22 @@ class Server:
 
     # callback for metricsQueue: get the metrics from each client after it finish its round
     def on_message_metrics(self, client, userdata, message):
-        metric_response = ClientMetrics.from_json(message.payload.decode("utf-8"))
+        metric_response = Metrics.from_json(message.payload.decode("utf-8"))
         self.metrics_responses.append(metric_response)
         self.fed_clients[metric_response.client_id].set_metrics_for_round(self.current_round, metric_response)
         self.spnfl_logger.info(f'T_RETURN_1 {metric_response.get_client_id()}')
 
+    def accept_client(self, client_info : ClientInfo) -> bool:
+        return AllClientsAcceptor().accept(client_info)
+
     def select_clients(self, clients_states : list[ClientState]) -> list[str]:
         return AllClientsSelector().select_clients(clients_states)
 
-    def aggregate(self, training_responses : list[ClientTrainingData]) -> list[ndarray]:
+    def aggregate(self, training_responses : list[TrainingData]) -> list[ndarray]:
         fed_avg = FedAvg()
         return fed_avg.aggregate(training_responses)
 
-    def stop_condition(self, clients_metrics : list[ClientMetrics]) -> bool:
+    def stop_condition(self, clients_metrics : list[Metrics]) -> bool:
         accuracies = []
         for client_metrics in clients_metrics:
             accuracies.append(client_metrics.get_metric(MetricType.ACCURACY))
@@ -256,7 +279,7 @@ class Server:
 
             # save partial model here
 
-            response = json.dumps({'agg_response': self.last_model})
+            response = json.dumps(ndarray_to_base64(self.last_model))
 
             self.spnfl_logger.info(f'T_AGGREG_END')
 
@@ -301,7 +324,7 @@ class Server:
             #    best_acc = mean_acc
             #self.spnfl_logger.info(f'T_SAVE_END')
 
-            # spnfl_logger.info(f'ROUND_DURATION {round_duration}')
+            self.spnfl_logger.info(f'ROUND_DURATION {round_duration}')
 
             # update stop queue or continue process
             if stop_fed:

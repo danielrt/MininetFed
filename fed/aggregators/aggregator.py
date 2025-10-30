@@ -2,11 +2,11 @@ from abc import abstractmethod
 
 from numpy import ndarray
 
-from fed.client_training_data import ClientTrainingData
+from fed.training_data import TrainingData
 
 
 class Aggregator:
 
     @abstractmethod
-    def aggregate(self, training_responses : list[ClientTrainingData]) -> list[ndarray]:
+    def aggregate(self, training_responses : list[TrainingData]) -> list[ndarray]:
         pass

@@ -2,10 +2,10 @@ import numpy as np
 from numpy import ndarray
 
 from fed.aggregators.aggregator import Aggregator
-from fed.client_training_data import ClientTrainingData
+from fed.training_data import TrainingData
 
 class FedAvg(Aggregator):
-    def aggregate(self, training_responses: list[ClientTrainingData]) -> list[ndarray]:
+    def aggregate(self, training_responses: list[TrainingData]) -> list[ndarray]:
         all_trainer_samples = []
         all_weights = []
         for training_response in training_responses:

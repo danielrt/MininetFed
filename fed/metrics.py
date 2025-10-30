@@ -2,22 +2,19 @@ import json
 from enum import Enum
 from typing import Any, TypeAlias, Union
 
-JSONSerializableType: TypeAlias = Union[
-    None, bool, int, float, str,
-    list["JSONSerializableType"],
-    dict[str, "JSONSerializableType"],
-]
+from fed.utils import JSONSerializableType
+
 
 class MetricType:
     ACCURACY = "accuracy"
 
-class ClientMetrics:
+class Metrics:
     def __init__(self, client_id : str, metrics : dict[str, JSONSerializableType]):
         self.client_id = client_id
         self.metrics = metrics
 
     @classmethod
-    def from_json(cls, json_str : str) -> "ClientMetrics":
+    def from_json(cls, json_str : str) -> "Metrics":
         json_data = json.loads(json_str)
         client_id = json_data["client_id"]
         metrics = json_data["metrics"]

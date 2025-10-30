@@ -1,26 +1,33 @@
 import numpy as np
 
-from fed.client_metrics import ClientMetrics, MetricType
-from fed.client_training_data import ClientTrainingData
+from fed.client_info import ClientInfo
+from fed.metrics import Metrics
 from fed.dataset_info import DatasetInfo
 
 
 class ClientState:
     def __init__(self, client_id):
         self.client_id = client_id
-        self.dataset_info : DatasetInfo = None
-        self.metrics : list[ClientMetrics | None] = []
+        self.dataset_info : DatasetInfo | None = None
+        self.client_info : ClientInfo | None = None
+        self.metrics : list[Metrics | None] = []
         self.selected : list[bool] = []
         self.training_status : list[bool] = []
 
     def get_client_id(self) -> str:
         return self.client_id
 
-    def set_dataset_info(self, dataset_info):
+    def set_dataset_info(self, dataset_info : DatasetInfo):
         self.dataset_info = dataset_info
 
     def get_dataset_info(self) -> DatasetInfo:
         return self.dataset_info
+
+    def set_client_info(self, client_info : ClientInfo):
+        self.client_info = client_info
+
+    def get_client_info(self) -> ClientInfo:
+        return self.client_info
 
     def set_selection_for_round(self, round_id : int,  selected : bool):
         for i in range(len(self.selected), round_id):
@@ -50,17 +57,17 @@ class ClientState:
     def get_training_status_for_all_rounds(self) -> list[bool]:
         return self.training_status
 
-    def set_metrics_for_round(self, round_id : int, metrics : ClientMetrics):
+    def set_metrics_for_round(self, round_id : int, metrics : Metrics):
         for i in range(len(self.metrics), round_id):
             self.metrics.append(None)
         self.metrics.append(metrics)
 
-    def get_metrics_for_round(self, round_id : int) -> ClientMetrics | None:
+    def get_metrics_for_round(self, round_id : int) -> Metrics | None:
         if round_id < len(self.metrics):
             return self.metrics[round_id]
         else:
             return None
 
-    def get_metrics_for_all_rounds(self) -> list[ClientMetrics]:
+    def get_metrics_for_all_rounds(self) -> list[Metrics]:
         return self.metrics
 

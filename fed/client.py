@@ -6,8 +6,11 @@ from abc import abstractmethod
 
 from numpy import ndarray
 from paho import mqtt
+from scipy.cluster.hierarchy import weighted
 
-from fed.client_metrics import ClientMetrics
+from fed.client_info import ClientInfo
+from fed.metrics import Metrics
+from fed.training_data import TrainingData
 from fed.dataset_info import DatasetInfo
 
 
@@ -22,13 +25,14 @@ class Color:
 
 class Client:
     def __init__(self):
-        self.client_id = ""
-        self.client_folder = ""
+        self.client_id : str = ""
+        self.client_folder : str = ""
         self.logger = None
         self.spnfl_logger = None
         self.mqtt_client = None
         self.stop = False
-        self.dataset_info = None
+        self.dataset_info : DatasetInfo | None = None
+        self.client_info : ClientInfo | None = None
 
     @abstractmethod
     def configure(self, client_args: dict):
@@ -38,17 +42,25 @@ class Client:
     @abstractmethod
     def prepare_data(self, path_to_data : str) -> DatasetInfo:
         pass
-
+    
     @abstractmethod
-    def update(self, global_weights : list[ndarray]):
+    def set_client_info(self, client_info : ClientInfo):
         pass
 
     @abstractmethod
-    def fit(self) -> list[ndarray]:
+    def update_weights(self, global_weights : list[ndarray]):
         pass
 
     @abstractmethod
-    def evaluate(self) -> ClientMetrics:
+    def get_weights(self) -> list[ndarray]:
+        pass
+
+    @abstractmethod
+    def fit(self) -> bool:
+        pass
+
+    @abstractmethod
+    def evaluate(self) -> Metrics:
         pass
 
     def configure_default(self, broker_addr, client_id, client_folder):
@@ -58,6 +70,7 @@ class Client:
         client.message_callback_add('minifed/selectionQueue', self.on_message_selection)
         client.message_callback_add('minifed/posAggQueue', self.on_message_agg)
         client.message_callback_add('minifed/stopQueue', self.on_message_stop)
+        client.message_callback_add('minifed/accept', self.on_message_accept)
 
         self.client_id = client_id
         self.client_folder = client_folder
@@ -82,15 +95,27 @@ class Client:
         h_spnfl.setFormatter(logging.Formatter(format_spnfl))
         self.spnfl_logger.addHandler(h_spnfl)
 
-        self.num_samples = self.prepare_data(self.client_folder)
+        self.dataset_info = self.prepare_data(self.client_folder)
+        self.client_info = ClientInfo(self.client_id)
+        self.set_client_info(self.client_info)
 
     # subscribe to queues on connection
     def on_connect(self, client, userdata, flags, rc):
         subscribe_queues = ['minifed/selectionQueue',
-                            'minifed/posAggQueue', 'minifed/stopQueue']
+                            'minifed/posAggQueue', 'minifed/stopQueue', 'minifed/accept']
         for s in subscribe_queues:
             self.mqtt_client.subscribe(s)
 
+    def on_message_accept(self, client, userdata, message):
+        msg = json.loads(message.payload.decode("utf-8"))
+        if msg['client_id'] == self.client_id:
+            if msg['accept']:
+                client.publish('minifed/ready',
+                               json.dumps(self.dataset_info.to_json()))
+                self.logger.info(f'client {self.client_id} was accepted by server to join')
+            else:
+                self.logger.info(f'client {self.client_id} was denied by server to join')
+                self.stop = True
     """
     callback for selectionQueue: the selection queue is sent by the server; 
     the client checks if it's selected for the current round or not. If yes, 
@@ -109,35 +134,29 @@ class Client:
                 print(
                     f'client was selected for training this round and will start training!')
 
-                resp_dict = {'id': CLIENT_NAME, 'success': True}
                 t0 = time.time()
-                try:
-                    weights = self.fit()
-                    resp_dict['weights'] = trainer.get_weights()
-                    resp_dict['num_samples'] = trainer.get_num_samples()
-                    if has_method(trainer, 'get_training_args'):
-                        resp_dict['training_args'] = trainer.get_training_args()
-                except Exception:
-                    print(traceback.format_exc())
-                    resp_dict['success'] = False
+                was_success = self.fit()
                 t_train = time.time() - t0
+                weights = None
+                if was_success:
+                    weights = self.get_weights()
+                client_training_data = TrainingData(self.client_id, was_success, round_id, weights)
 
-                spnfl_logger.info(f"T_TRAIN {resp_dict['success']} {t_train}")
-                response = json.dumps(resp_dict, default=default)
+                self.spnfl_logger.info(f"T_TRAIN {was_success} {t_train}")
+                response = json.dumps(client_training_data.to_json())
 
                 client.publish('minifed/preAggQueue', response)
-                spnfl_logger.info(f'T_RETURN_0')
+                self.spnfl_logger.info(f'T_RETURN_0')
                 print(f'finished training and sent weights!')
             else:
-                spnfl_logger.info(f'T_SELECT False')
-                selected = False
-                print(color.BOLD_START + '[{}] new round starting'.format(n_round[client_id]) + color.BOLD_END)
-                print(f'trainer was not selected for training this round')
+                self.spnfl_logger.info(f'T_SELECT False')
+                print(Color.BOLD_START + '[{}] new round starting'.format(round_id) + Color.BOLD_END)
+                print(f'trainer WAS NOT selected for training this round')
 
     # callback for posAggQueue: gets aggregated weights and publish validation results on the metricsQueue
     def on_message_agg(self, client, userdata, message):
         global selected
-        spnfl_logger.info(f'T_SEND')
+        self.spnfl_logger.info(f'T_SEND')
         print(f'received aggregated weights!')
         msg = json.loads(message.payload.decode("utf-8"))
         agg_weights = [np.asarray(w, dtype=np.float32)
