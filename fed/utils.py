@@ -22,3 +22,12 @@ def base64_to_ndarray(entry: dict) -> np.ndarray:
     data = base64.b64decode(entry["data_b64"])
     arr = np.frombuffer(data, dtype=np.dtype(entry["dtype"]))
     return arr.reshape(entry["shape"])
+
+class Color:
+    BLUE = '\033[94m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    BOLD_START = '\033[1m'
+    BOLD_END = '\033[0m'
+    RESET = "\x1B[0m"

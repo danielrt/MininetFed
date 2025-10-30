@@ -2,15 +2,17 @@ import numpy as np
 from numpy import ndarray
 
 from fed.aggregators.aggregator import Aggregator
+from fed.client_state import ClientState
 from fed.training_data import TrainingData
 
 class FedAvg(Aggregator):
-    def aggregate(self, training_responses: list[TrainingData]) -> list[ndarray]:
+    def aggregate(self, training_responses: list[TrainingData], clients_state : dict[str, ClientState]) -> list[ndarray]:
         all_trainer_samples = []
         all_weights = []
         for training_response in training_responses:
-            all_trainer_samples.append(
-                training_response.get_num_samples())
+            client_id = training_response.get_node_id()
+            num_samples = clients_state[client_id].get_dataset_info().get_num_samples()
+            all_trainer_samples.append(num_samples)
             all_weights.append(training_response.get_weights())
 
         scaling_factor = list(np.array(all_trainer_samples) /

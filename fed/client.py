@@ -5,28 +5,20 @@ import time
 from abc import abstractmethod
 
 from numpy import ndarray
-from paho import mqtt
-from scipy.cluster.hierarchy import weighted
+import paho.mqtt.client as mqtt
 
 from fed.client_info import ClientInfo
 from fed.metrics import Metrics
 from fed.training_data import TrainingData
 from fed.dataset_info import DatasetInfo
+from fed.utils import Color
 
-
-class Color:
-    BLUE = '\033[94m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    RED = '\033[91m'
-    BOLD_START = '\033[1m'
-    BOLD_END = '\033[0m'
-    RESET = "\x1B[0m"
 
 class Client:
     def __init__(self):
         self.client_id : str = ""
         self.client_folder : str = ""
+        self.current_round = 0
         self.logger = None
         self.spnfl_logger = None
         self.mqtt_client = None
@@ -125,12 +117,12 @@ class Client:
         msg = json.loads(message.payload.decode("utf-8"))
         client_id = msg['id']
         selected = bool(msg['selected'])
-        round_id = int(msg['round_id'])
+        self.current_round = int(msg['round_id'])
         if client_id == self.client_id:
-            self.spnfl_logger.info(f'START_ROUND {round_id}')
+            self.spnfl_logger.info(f'START_ROUND {self.current_round}')
             if selected:
                 self.spnfl_logger.info(f'T_SELECT True')
-                print(Color.BOLD_START + '[{}] new round starting'.format(round_id) + Color.BOLD_END)
+                print(Color.BOLD_START + '[{}] new round starting'.format(self.current_round) + Color.BOLD_END)
                 print(
                     f'client was selected for training this round and will start training!')
 
@@ -140,7 +132,7 @@ class Client:
                 weights = None
                 if was_success:
                     weights = self.get_weights()
-                client_training_data = TrainingData(self.client_id, was_success, round_id, weights)
+                client_training_data = TrainingData(self.client_id, was_success, self.current_round, weights)
 
                 self.spnfl_logger.info(f"T_TRAIN {was_success} {t_train}")
                 response = json.dumps(client_training_data.to_json())
@@ -150,31 +142,24 @@ class Client:
                 print(f'finished training and sent weights!')
             else:
                 self.spnfl_logger.info(f'T_SELECT False')
-                print(Color.BOLD_START + '[{}] new round starting'.format(round_id) + Color.BOLD_END)
+                print(Color.BOLD_START + '[{}] new round starting'.format(self.current_round) + Color.BOLD_END)
                 print(f'trainer WAS NOT selected for training this round')
 
     # callback for posAggQueue: gets aggregated weights and publish validation results on the metricsQueue
     def on_message_agg(self, client, userdata, message):
-        global selected
         self.spnfl_logger.info(f'T_SEND')
         print(f'received aggregated weights!')
-        msg = json.loads(message.payload.decode("utf-8"))
-        agg_weights = [np.asarray(w, dtype=np.float32)
-                       for w in msg["agg_response"][CLIENT_NAME]["weights"]]
-        results = trainer.all_metrics()
-        results['selected'] = selected
-        response = json.dumps(
-            {'id': CLIENT_NAME, "metrics": results}, default=default)
-        trainer.update_weights(agg_weights)
+        agg_training_data = TrainingData.from_json(message.payload.decode("utf-8"))
 
-        if has_method(trainer, "agg_response_extra_info"):
-            trainer.agg_response_extra_info(
-                msg["agg_response"][CLIENT_NAME] | msg["agg_response"]['all'])
-
+        metrics = self.evaluate()
         print(f'sending eval metrics!\n')
-        client.publish('minifed/metricsQueue', response)
-        spnfl_logger.info(f'T_RETURN_1')
-        spnfl_logger.info(f'END_ROUND {n_round[CLIENT_NAME] - 1}')
+        client.publish('minifed/metricsQueue', metrics.to_json())
+
+        self.update_weights(agg_training_data.get_weights())
+
+        self.spnfl_logger.info(f'T_RETURN_1')
+        self.spnfl_logger.info(f'END_ROUND {self.current_round}')
+
     # callback for stopQueue: if conditions are met, stop training and exit process
     def on_message_stop(self, client, userdata, message):
         print(Color.RED + f'received message to stop!')

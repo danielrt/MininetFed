@@ -1,7 +1,6 @@
 import logging
 import time
 from abc import abstractmethod
-from typing import List
 
 import numpy as np
 from numpy import ndarray
@@ -16,21 +15,12 @@ from fed.client_state import ClientState
 from fed.metrics import Metrics, MetricType
 from fed.training_data import TrainingData
 from fed.dataset_info import DatasetInfo
-from fed.utils import ndarray_to_base64
+from fed.utils import Color
 
-
-# class for coloring messages on terminal
-class Color:
-    BLUE = '\033[94m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    RED = '\033[91m'
-    BOLD_START = '\033[1m'
-    BOLD_END = '\033[0m'
-    RESET = "\x1B[0m"
 
 class Server:
     def __init__(self):
+        self.server_id = ""
         self.broker_addr = ""
         self.saved_model_file = ""
 
@@ -66,8 +56,9 @@ class Server:
     def configure(self):
         pass
 
-    def configure_default(self, broker_addr, output_folder, server_args : dict):
+    def configure_default(self, server_id, broker_addr, output_folder, server_args : dict):
         # connect on queue
+        self.server_id = server_id
         self.mqtt_client = mqtt.Client('server')
         self.mqtt_client.connect(broker_addr, bind_port=1883)
         self.mqtt_client.on_connect = self.on_connect
@@ -115,7 +106,7 @@ class Server:
         data_info = DatasetInfo.from_json(message.payload.decode("utf-8"))
         client_id = data_info.get_client_id()
         self.fed_clients[client_id].set_dataset_info(data_info)
-        self.spnfl_logger.info(f'T_ARRIVAL {m["id"]}')
+        self.spnfl_logger.info(f'T_ARRIVAL {client_id}')
 
     def on_message_register(self, client, userdata, message):
         client_info = ClientInfo.from_json(message.payload.decode("utf-8"))
@@ -140,7 +131,7 @@ class Server:
     # callback for preAggQueue: get weights of trainers, aggregate and send back
     def on_message_agg(self, client, userdata, message):
         training_response = TrainingData.from_json(message.payload.decode("utf-8"))
-        client_id = training_response.get_client_id()
+        client_id = training_response.get_node_id()
         was_success = training_response.was_success()
         client_round_id = training_response.get_round_id()
         response_status = was_success and client_round_id == self.current_round
@@ -277,9 +268,11 @@ class Server:
             # aggregate and send
             self.last_model = self.aggregate(self.training_responses)
 
+            agg_model_data = TrainingData(self.server_id, True, self.current_round, self.last_model)
+
             # save partial model here
 
-            response = json.dumps(ndarray_to_base64(self.last_model))
+            response = json.dumps(agg_model_data.to_json())
 
             self.spnfl_logger.info(f'T_AGGREG_END')
 
