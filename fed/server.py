@@ -1,10 +1,8 @@
 import logging
 import time
-from abc import abstractmethod
 
 import numpy as np
 from numpy import ndarray
-import paho.mqtt.client as mqtt
 import json
 
 from fed.aggregators.fedavg import FedAvg
@@ -12,16 +10,16 @@ from fed.client_acceptors.all_clients_acceptor import AllClientsAcceptor
 from fed.client_info import ClientInfo
 from fed.client_selectors.all_clients_selector import AllClientsSelector
 from fed.client_state import ClientState
+from fed.fed_node import FedNode, FedTopics
 from fed.metrics import Metrics, MetricType
 from fed.training_data import TrainingData
 from fed.dataset_info import DatasetInfo
 from fed.utils import Color
 
 
-class Server:
+class Server(FedNode):
     def __init__(self):
-        self.server_id = ""
-        self.broker_addr = ""
+        super().__init__()
         self.saved_model_file = ""
 
         self.fed_clients: dict[str, ClientState] = {}
@@ -37,9 +35,6 @@ class Server:
         self.num_rounds = 0
         self.min_trainers = 0
 
-        # connect on queue
-        self.mqtt_client = None
-
         # general logger
         self.logger = logging.getLogger("server")
         self.logger.setLevel(logging.INFO)
@@ -49,44 +44,16 @@ class Server:
         self.spnfl_logger.setLevel(logging.INFO)
         self.spnfl_logger.propagate = False
 
-        self.metricType = {"infotype": "METRIC"}
-        self.executionType = {"infotype": "EXECUT"}
+    def get_topics_to_subscribe(self) -> list[FedTopics]:
+        return [FedTopics.CLIENT_REGISTER, FedTopics.CLIENT_READY,
+                  FedTopics.CLIENT_WEIGHTS, FedTopics.CLIENT_METRICS]
 
-    @abstractmethod
-    def configure(self):
-        pass
+    def configure(self, server_id, broker_addr, server_folder, server_args : dict):
+        super().configure(server_id, broker_addr, server_folder, server_args)
 
-    def configure_default(self, server_id, broker_addr, output_folder, server_args : dict):
-        # connect on queue
-        self.server_id = server_id
-        self.mqtt_client = mqtt.Client('server')
-        self.mqtt_client.connect(broker_addr, bind_port=1883)
-        self.mqtt_client.on_connect = self.on_connect
-        self.mqtt_client.message_callback_add('minifed/registerQueue', self.on_message_register)
-        self.mqtt_client.message_callback_add('minifed/preAggQueue', self.on_message_agg)
-        self.mqtt_client.message_callback_add('minifed/metricsQueue', self.on_message_metrics)
+        self.saved_model_file = f'{server_folder}/best.model'
 
-        self.saved_model_file = f'{output_folder}/best.model'
-
-        # general logger
-        log_format = "%(asctime)s - %(infotype)-6s - %(levelname)s - %(message)s"
-        log_file = f'{output_folder}/server.log'
-        h_general = logging.FileHandler(filename=log_file, mode="w")
-        h_general.setFormatter(logging.Formatter(log_format))
-        self.logger.addHandler(h_general)
-
-        # spnfl logger (https://sol.sbc.org.br/index.php/sbrc/article/view/35122/34913)
-        spnfl_log_file = f'{output_folder}/spn.log'
-        spnfl_format_logger = "%(asctime)s - %(message)s"
-        h_spnfl = logging.FileHandler(spnfl_log_file, mode="w")
-        h_spnfl.setFormatter(logging.Formatter(spnfl_format_logger))
-        self.spnfl_logger.addHandler(h_spnfl)
-
-        self.server_args = server_args
-        is_overridden = type(self).configure is not Server.configure
-        required = {"min_trainers", "num_rounds", }
-        if not is_overridden:
-            required.add("stop_a")
+        required = {"min_trainers", "num_rounds"}
         missing = required - server_args.keys()
         if missing:
             raise RuntimeError(f"The following server configurations should be provided: {missing}")
@@ -94,21 +61,21 @@ class Server:
             self.num_rounds = server_args["num_rounds"]
             self.min_trainers = server_args["min_trainers"]
 
-    # subscribe to queues on connection
-    def on_connect(self, client, userdata, flags, rc):
-        subscribe_queues = ['minifed/registerQueue', 'minifed/preAggQueue',
-                            'minifed/metricsQueue', 'minifed/ready']
-        for s in subscribe_queues:
-            self.mqtt_client.subscribe(s)
+        # general logger
+        log_format = "%(asctime)s - %(infotype)-6s - %(levelname)s - %(message)s"
+        log_file = f'{server_folder}/server.log'
+        h_general = logging.FileHandler(filename=log_file, mode="w")
+        h_general.setFormatter(logging.Formatter(log_format))
+        self.logger.addHandler(h_general)
 
-    # callback for registerQueue: add trainer to the pool of trainers
-    def on_message_ready(self, client, userdata, message):
-        data_info = DatasetInfo.from_json(message.payload.decode("utf-8"))
-        client_id = data_info.get_client_id()
-        self.fed_clients[client_id].set_dataset_info(data_info)
-        self.spnfl_logger.info(f'T_ARRIVAL {client_id}')
+        # spnfl logger (https://sol.sbc.org.br/index.php/sbrc/article/view/35122/34913)
+        spnfl_log_file = f'{server_folder}/spn.log'
+        spnfl_format_logger = "%(asctime)s - %(message)s"
+        h_spnfl = logging.FileHandler(spnfl_log_file, mode="w")
+        h_spnfl.setFormatter(logging.Formatter(spnfl_format_logger))
+        self.spnfl_logger.addHandler(h_spnfl)
 
-    def on_message_register(self, client, userdata, message):
+    def on_client_register(self, message):
         client_info = ClientInfo.from_json(message.payload.decode("utf-8"))
         accepted = self.accept_client(client_info)
         client_id = client_info.get_client_id()
@@ -116,20 +83,26 @@ class Server:
             self.fed_clients[client_id] = ClientState(client_id)
             self.fed_clients[client_id].set_client_info(client_info)
             self.logger.info(
-                f'trainer {client_id} was accepted to join the pool', extra=self.executionType)
+                f'trainer {client_id} was accepted to join the pool')
             print(
                 f'trainer {client_id} was accepted to join the pool')
         else:
             self.logger.info(
-                f'trainer {client_id} was denied to join the pool', extra=self.executionType)
+                f'trainer {client_id} was denied to join the pool')
             print(
                 f'trainer number {client_id} was denied to join the pool')
 
-        client.publish(
-            'minifed/accept', json.dumps({"client_id": client_id, "accepted": accepted}))
+        super().publish_to(
+            FedTopics.CLIENT_ACCEPTED, json.dumps({"client_id": client_id, "accepted": accepted}))
+
+    def on_client_ready(self, message):
+        data_info = DatasetInfo.from_json(message.payload.decode("utf-8"))
+        client_id = data_info.get_client_id()
+        self.fed_clients[client_id].set_dataset_info(data_info)
+        self.spnfl_logger.info(f'T_ARRIVAL {client_id}')
 
     # callback for preAggQueue: get weights of trainers, aggregate and send back
-    def on_message_agg(self, client, userdata, message):
+    def on_client_weights(self, message):
         training_response = TrainingData.from_json(message.payload.decode("utf-8"))
         client_id = training_response.get_node_id()
         was_success = training_response.was_success()
@@ -141,14 +114,14 @@ class Server:
             self.training_responses.append(training_response)
             self.fed_clients[client_id].set_training_status_for_round(client_round_id, True)
             self.logger.info(
-                f'received weights from trainer {client_id}!', extra=self.executionType)
+                f'received weights from trainer {client_id}!')
             print(f'received weights from trainer {client_id}!')
         else:
             self.fed_clients[client_id].set_training_status_for_round(client_round_id, False)
             print(f'client {client_id} failed in training or delivered response too late!')
 
     # callback for metricsQueue: get the metrics from each client after it finish its round
-    def on_message_metrics(self, client, userdata, message):
+    def on_client_metrics(self, message):
         metric_response = Metrics.from_json(message.payload.decode("utf-8"))
         self.metrics_responses.append(metric_response)
         self.fed_clients[metric_response.client_id].set_metrics_for_round(self.current_round, metric_response)
@@ -160,16 +133,16 @@ class Server:
     def select_clients(self, clients_states : list[ClientState]) -> list[str]:
         return AllClientsSelector().select_clients(clients_states)
 
-    def aggregate(self, training_responses : list[TrainingData]) -> list[ndarray]:
+    def aggregate(self, training_responses : list[TrainingData], clients_state : dict[str, ClientState]) -> list[ndarray]:
         fed_avg = FedAvg()
-        return fed_avg.aggregate(training_responses)
+        return fed_avg.aggregate(training_responses, clients_state)
 
     def stop_condition(self, clients_metrics : list[Metrics]) -> bool:
         accuracies = []
         for client_metrics in clients_metrics:
             accuracies.append(client_metrics.get_metric(MetricType.ACCURACY))
         mean_acc = float(np.mean(np.array(accuracies)))
-        self.logger.info(f'mean_accuracy: {mean_acc}\n', extra=self.metricType)
+        self.logger.info(f'mean_accuracy: {mean_acc}\n')
         print(Color.GREEN +
               f'mean accuracy on round {self.current_round} was {mean_acc}\n' + Color.RESET)
         self.accuracies_by_round.append(mean_acc)
@@ -189,16 +162,13 @@ class Server:
         return False
 
     def run(self):
-        # start loop
-        self.mqtt_client.loop_start()
-        self.logger.info('starting server...', extra=self.executionType)
-        print(Color.BOLD_START + 'starting server...' + Color.BOLD_END)
-        self.mqtt_client.publish('minifed/autoWaitContinue', json.dumps({'continue': True}))
+        super().start_communication_loop()
+        self.logger.info(f'starting server {super().get_node_id()}...')
+        print(Color.BOLD_START + f'starting node {super().get_node_id()}...' + Color.BOLD_END)
+        super().publish_to('minifed/autoWaitContinue', json.dumps({'continue': True}))
 
         self.spnfl_logger.info("INIT_EXPERIMENT")
 
-        # best accuracy so far
-        best_acc = 0
         # best model so far
         best_model = None
 
@@ -219,7 +189,7 @@ class Server:
             self.training_responses = []
             self.metrics_responses = []
             self.logger.info(
-                f'round: {self.current_round}', extra=self.metricType)
+                f'round: {self.current_round}')
             print(Color.RESET + '\n' + Color.BOLD_START +
                   f'starting round {self.current_round}' + Color.BOLD_END)
 
@@ -229,30 +199,29 @@ class Server:
 
             # select trainers for round
             if len(self.fed_clients) == 0:
-                self.logger.critical("Client's list empty", extra=self.executionType)
+                self.logger.critical("Client's list empty")
 
             all_fed_clients = list(self.fed_clients.values())
             selected_fed_clients = self.select_clients(all_fed_clients)
 
-            self.logger.info(f"n_selected: {len(selected_fed_clients)}", extra=self.metricType)
+            self.logger.info(f"n_selected: {len(selected_fed_clients)}")
             self.logger.info(
-                f"{json.dumps({'selected_trainers': selected_fed_clients})}", extra=self.metricType)
+                f"{json.dumps({'selected_trainers': selected_fed_clients})}")
             for fed_client in all_fed_clients:
                 fed_client_id = fed_client.get_client_id()
+                m_dict = {'id': fed_client_id, 'round_id' : self.current_round}
+
                 if  fed_client_id in selected_fed_clients:
-                    # logger.info(
-                    #     f'selected: {t}', extra=metricType)
-                    print(
-                        f'selected trainer {fed_client_id} for training on round {self.current_round}')
-                    m = json.dumps({'id': fed_client_id, 'selected': True, 'round_id' : self.current_round}).replace(' ', '')
-                    self.mqtt_client.publish('minifed/selectionQueue', m)
+                    m_dict['selected'] = True
+                    self.logger.info(f'selected: {fed_client_id}')
+                    print(f'selected client {fed_client_id} for training on round {self.current_round}')
                     self.spnfl_logger.info(f'T_SELECT {fed_client_id} True')
                 else:
-                    # logger.info(
-                    #     f'NOT_selected: {t}', extra=metricType)
-                    m = json.dumps({'id': fed_client_id, 'selected': False, 'round_id' : self.current_round}).replace(' ', '')
-                    self.mqtt_client.publish('minifed/selectionQueue', m)
+                    m_dict['selected'] = False
+                    self.logger.info(f'NOT_selected: {fed_client_id}')
                     self.spnfl_logger.info(f'T_SELECT {fed_client_id} False')
+
+                super().publish_to(FedTopics.CLIENT_SELECTION, json.dumps(m_dict))
 
             self.spnfl_logger.info(f'T_SELECT_END {len(selected_fed_clients)}')
 
@@ -266,9 +235,9 @@ class Server:
             self.spnfl_logger.info(f'T_AGGREG_START')
 
             # aggregate and send
-            self.last_model = self.aggregate(self.training_responses)
+            self.last_model = self.aggregate(self.training_responses, self.fed_clients)
 
-            agg_model_data = TrainingData(self.server_id, True, self.current_round, self.last_model)
+            agg_model_data = TrainingData(super().get_node_id(), True, self.current_round, self.last_model)
 
             # save partial model here
 
@@ -276,12 +245,11 @@ class Server:
 
             self.spnfl_logger.info(f'T_AGGREG_END')
 
-            self.mqtt_client.publish('minifed/posAggQueue', response)  #### T_SEND
+            super().publish_to(FedTopics.SERVER_WEIGHTS, response)  #### T_SEND
 
             self.spnfl_logger.info(f'T_SEND')
 
-            self.logger.info(f'sent aggregated weights to trainers!',
-                        extra=self.executionType)
+            self.logger.info(f'sent aggregated weights to trainers!')
             print(f'sent aggregated weights to trainers and waiting trainers metrics!')
 
             self.spnfl_logger.info(f'T_RETURN_1_START')
@@ -311,11 +279,11 @@ class Server:
                 print(
                     Color.BLUE + f"Estimated time remaining until the end of the experiment: {mins}m {secs}s" + Color.RESET)
 
-            #self.spnfl_logger.info(f'T_SAVE_START')
+            #super().get_spnfl_logger().info(f'T_SAVE_START')
             #if mean_acc >= best_acc:
             #    best_model = controller.get_global_model()
             #    best_acc = mean_acc
-            #self.spnfl_logger.info(f'T_SAVE_END')
+            #super().get_spnfl_logger().info(f'T_SAVE_END')
 
             self.spnfl_logger.info(f'ROUND_DURATION {round_duration}')
 
@@ -325,10 +293,8 @@ class Server:
                     json.dump(best_model, f, ensure_ascii=False, indent=2)
                 # spnfl_logger.info(f'T_SAVE_END')
 
-                self.logger.info('stop_condition: accuracy', extra=self.metricType)
-                print(Color.RED + f'accuracy threshold met! stopping the training!')
-                m = json.dumps({'stop': True})
-                self.mqtt_client.publish('minifed/stopQueue', m)
+
+                super().publish_to(FedTopics.STOP, None)
                 time.sleep(1)  # time for clients to finish
                 # spnfl_logger.info(f'T_COMPUTE_END')
                 self.spnfl_logger.info(f'END_ROUND {self.current_round}')
@@ -343,7 +309,7 @@ class Server:
             json.dump(self.best_model, f, ensure_ascii=False, indent=2)
         # spnfl_logger.info(f'T_SAVE_END')
 
-        self.logger.info('stop_condition: rounds', extra=self.metricType)
+        self.logger.info('stop_condition: rounds')
         print(Color.RED + f'rounds threshold met! stopping the training!' + Color.RESET)
-        self.mqtt_client.publish('minifed/stopQueue', None)
-        self.mqtt_client.loop_stop()
+        super().publish_to(FedTopics.STOP, None)
+        super().stop_communication_loop()

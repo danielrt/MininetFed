@@ -5,30 +5,26 @@ import time
 from abc import abstractmethod
 
 from numpy import ndarray
-import paho.mqtt.client as mqtt
 
 from fed.client_info import ClientInfo
+from fed.fed_node import FedNode, FedTopics
 from fed.metrics import Metrics
 from fed.training_data import TrainingData
 from fed.dataset_info import DatasetInfo
 from fed.utils import Color
 
 
-class Client:
+class Client(FedNode):
     def __init__(self):
+        super().__init__()
         self.client_id : str = ""
         self.client_folder : str = ""
         self.current_round = 0
         self.logger = None
         self.spnfl_logger = None
-        self.mqtt_client = None
         self.stop = False
         self.dataset_info : DatasetInfo | None = None
         self.client_info : ClientInfo | None = None
-
-    @abstractmethod
-    def configure(self, client_args: dict):
-        pass
 
     """ Retorna o numero de samples do dataset"""
     @abstractmethod
@@ -55,17 +51,14 @@ class Client:
     def evaluate(self) -> Metrics:
         pass
 
-    def configure_default(self, broker_addr, client_id, client_folder):
-        client = mqtt.Client(self.client_id)
-        client.connect(broker_addr, keepalive=0)
-        client.on_connect = self.on_connect
-        client.message_callback_add('minifed/selectionQueue', self.on_message_selection)
-        client.message_callback_add('minifed/posAggQueue', self.on_message_agg)
-        client.message_callback_add('minifed/stopQueue', self.on_message_stop)
-        client.message_callback_add('minifed/accept', self.on_message_accept)
+    def get_topics_to_subscribe(self) -> list[FedTopics]:
+        return [FedTopics.CLIENT_SELECTION, FedTopics.CLIENT_ACCEPTED,
+                  FedTopics.SERVER_WEIGHTS, FedTopics.STOP]
+
+    def configure(self, client_id, broker_addr, client_folder, client_args):
+        super().configure(client_id, broker_addr, client_folder, client_args)
 
         self.client_id = client_id
-        self.client_folder = client_folder
 
         # logger geral
         log_format = "%(asctime)s - %(infotype)-6s - %(levelname)s - %(message)s"
@@ -87,22 +80,15 @@ class Client:
         h_spnfl.setFormatter(logging.Formatter(format_spnfl))
         self.spnfl_logger.addHandler(h_spnfl)
 
-        self.dataset_info = self.prepare_data(self.client_folder)
-        self.client_info = ClientInfo(self.client_id)
+        self.dataset_info = self.prepare_data(client_folder)
+        self.client_info = ClientInfo(client_id)
         self.set_client_info(self.client_info)
 
-    # subscribe to queues on connection
-    def on_connect(self, client, userdata, flags, rc):
-        subscribe_queues = ['minifed/selectionQueue',
-                            'minifed/posAggQueue', 'minifed/stopQueue', 'minifed/accept']
-        for s in subscribe_queues:
-            self.mqtt_client.subscribe(s)
-
-    def on_message_accept(self, client, userdata, message):
+    def on_client_accepted(self, message):
         msg = json.loads(message.payload.decode("utf-8"))
         if msg['client_id'] == self.client_id:
             if msg['accept']:
-                client.publish('minifed/ready',
+                super().publish_to(FedTopics.CLIENT_READY,
                                json.dumps(self.dataset_info.to_json()))
                 self.logger.info(f'client {self.client_id} was accepted by server to join')
             else:
@@ -113,7 +99,7 @@ class Client:
     the client checks if it's selected for the current round or not. If yes, 
     the client trains and send the training results back.
     """
-    def on_message_selection(self, client, userdata, message):
+    def on_client_selection(self, message):
         msg = json.loads(message.payload.decode("utf-8"))
         client_id = msg['id']
         selected = bool(msg['selected'])
@@ -135,9 +121,8 @@ class Client:
                 client_training_data = TrainingData(self.client_id, was_success, self.current_round, weights)
 
                 self.spnfl_logger.info(f"T_TRAIN {was_success} {t_train}")
-                response = json.dumps(client_training_data.to_json())
 
-                client.publish('minifed/preAggQueue', response)
+                super().publish_to(FedTopics.CLIENT_WEIGHTS, client_training_data.to_json())
                 self.spnfl_logger.info(f'T_RETURN_0')
                 print(f'finished training and sent weights!')
             else:
@@ -146,14 +131,14 @@ class Client:
                 print(f'trainer WAS NOT selected for training this round')
 
     # callback for posAggQueue: gets aggregated weights and publish validation results on the metricsQueue
-    def on_message_agg(self, client, userdata, message):
+    def on_server_weights(self, message):
         self.spnfl_logger.info(f'T_SEND')
         print(f'received aggregated weights!')
         agg_training_data = TrainingData.from_json(message.payload.decode("utf-8"))
 
         metrics = self.evaluate()
         print(f'sending eval metrics!\n')
-        client.publish('minifed/metricsQueue', metrics.to_json())
+        super().publish_to(FedTopics.CLIENT_METRICS, metrics.to_json())
 
         self.update_weights(agg_training_data.get_weights())
 
@@ -161,17 +146,17 @@ class Client:
         self.spnfl_logger.info(f'END_ROUND {self.current_round}')
 
     # callback for stopQueue: if conditions are met, stop training and exit process
-    def on_message_stop(self, client, userdata, message):
+    def on_stop(self):
         print(Color.RED + f'received message to stop!')
         self.stop = True
 
     def run(self):
         # start waiting for jobs
-        self.mqtt_client.loop_start()
+        super().run()
 
         self.spnfl_logger.info("INIT_EXPERIMENT")
 
-        self.mqtt_client.publish('minifed/registerQueue', self.dataset_info.to_json())
+        super().publish_to(FedTopics.CLIENT_REGISTER, self.client_info.to_json())
         self.spnfl_logger.info(f'T_ARRIVAL')
         print(Color.BOLD_START +
               f'trainer {self.client_id} connected!\n' + Color.BOLD_END)
