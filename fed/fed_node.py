@@ -1,11 +1,7 @@
-import logging
 from abc import abstractmethod
 from enum import Enum
 
 import paho.mqtt.client as mqtt
-
-from fed.utils import Color
-
 
 class FedTopics(Enum):
     CLIENT_REGISTER = "client_register"
