@@ -152,7 +152,7 @@ class Client(FedNode):
 
     def run(self):
         # start waiting for jobs
-        super().run()
+        super().start_communication_loop()
 
         self.spnfl_logger.info("INIT_EXPERIMENT")
 
@@ -164,5 +164,4 @@ class Client(FedNode):
         while not self.stop:
             time.sleep(1)
 
-        self.mqtt_client.loop_stop()
-        exit()
+        super().stop_communication_loop()

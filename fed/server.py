@@ -5,13 +5,17 @@ import numpy as np
 from numpy import ndarray
 import json
 
-from fed.aggregators.fedavg import FedAvg
+from fed.client_acceptors.client_acceptor import ClientAcceptorType
+from fed.client_selectors.client_selector import ClientSelectorType
+from fed.metrics_aggregators.accuracy_aggregator import AccuracyAggregator
+from fed.model_aggregators.fedavg import FedAvg
 from fed.client_acceptors.all_clients_acceptor import AllClientsAcceptor
 from fed.client_info import ClientInfo
 from fed.client_selectors.all_clients_selector import AllClientsSelector
 from fed.client_state import ClientState
 from fed.fed_node import FedNode, FedTopics
 from fed.metrics import Metrics, MetricType
+from fed.model_aggregators.model_aggregator import ModelAggregatorType
 from fed.training_data import TrainingData
 from fed.dataset_info import DatasetInfo
 from fed.utils import Color
@@ -20,14 +24,20 @@ from fed.utils import Color
 class Server(FedNode):
     def __init__(self):
         super().__init__()
-        self.saved_model_file = ""
+        self.best_model_file = ""
+        self.last_model_file = ""
 
         self.fed_clients: dict[str, ClientState] = {}
         self.training_responses: list[TrainingData] = []
         self.metrics_responses: list[Metrics] = []
         self.current_round = 1
-        self.accuracies_by_round = []
-        self.best_acc = 0
+        self.agg_metric_by_round = []
+        self.best_agg_metric = 0.0
+        self.metric_stop_value = 0.0
+        self.metric_name = MetricType.ACCURACY
+        self.model_aggregator = ModelAggregatorType.FED_AVG
+        self.client_selector = ClientSelectorType.ALL_CLIENTS
+        self.client_acceptor = ClientAcceptorType.ALL_CLIENTS
         self.no_improvement_counter = 0
         self.last_model = None
         self.best_model = None
@@ -51,15 +61,27 @@ class Server(FedNode):
     def configure(self, server_id, broker_addr, server_folder, server_args : dict):
         super().configure(server_id, broker_addr, server_folder, server_args)
 
-        self.saved_model_file = f'{server_folder}/best.model'
+        self.best_model_file = f'{server_folder}/best.model'
+        self.server_args = server_args
 
-        required = {"min_trainers", "num_rounds"}
+        required = {"min_trainers", "num_rounds", "stop_value", "metric_type"}
         missing = required - server_args.keys()
         if missing:
             raise RuntimeError(f"The following server configurations should be provided: {missing}")
         else:
             self.num_rounds = server_args["num_rounds"]
             self.min_trainers = server_args["min_trainers"]
+            self.metric_stop_value = server_args["stop_value"]
+
+        # optional server args
+        if "metric_name" in server_args:
+            self.metric_name = server_args["metric_name"]
+        if "model_aggregator" in server_args:
+            self.model_aggregator = server_args["model_aggregator"]
+        if "client_acceptor" in server_args:
+            self.client_acceptor = server_args["client_acceptor"]
+        if "client_selector" in server_args:
+            self.client_selector = server_args["client_selector"]
 
         # general logger
         log_format = "%(asctime)s - %(infotype)-6s - %(levelname)s - %(message)s"
@@ -83,14 +105,14 @@ class Server(FedNode):
             self.fed_clients[client_id] = ClientState(client_id)
             self.fed_clients[client_id].set_client_info(client_info)
             self.logger.info(
-                f'trainer {client_id} was accepted to join the pool')
+                f'client {client_id} was accepted to join the pool')
             print(
-                f'trainer {client_id} was accepted to join the pool')
+                f'client {client_id} was accepted to join the pool')
         else:
             self.logger.info(
-                f'trainer {client_id} was denied to join the pool')
+                f'client {client_id} was denied to join the pool')
             print(
-                f'trainer number {client_id} was denied to join the pool')
+                f'client {client_id} was denied to join the pool')
 
         super().publish_to(
             FedTopics.CLIENT_ACCEPTED, json.dumps({"client_id": client_id, "accepted": accepted}))
@@ -128,44 +150,52 @@ class Server(FedNode):
         self.spnfl_logger.info(f'T_RETURN_1 {metric_response.get_client_id()}')
 
     def accept_client(self, client_info : ClientInfo) -> bool:
-        return AllClientsAcceptor().accept(client_info)
+        accepted_clients = None
+        if self.client_acceptor == ClientAcceptorType.ALL_CLIENTS:
+            accepted_clients = AllClientsAcceptor().accept(client_info)
+        return accepted_clients
 
     def select_clients(self, clients_states : list[ClientState]) -> list[str]:
-        return AllClientsSelector().select_clients(clients_states)
+        selected_clients = None
+        if self.client_selector == ClientSelectorType.ALL_CLIENTS:
+            selected_clients = AllClientsSelector().select_clients(clients_states)
+        return selected_clients
 
-    def aggregate(self, training_responses : list[TrainingData], clients_state : dict[str, ClientState]) -> list[ndarray]:
-        fed_avg = FedAvg()
-        return fed_avg.aggregate(training_responses, clients_state)
+    def aggregate_model(self, training_responses : list[TrainingData], clients_state : dict[str, ClientState]) -> list[ndarray]:
+        agg_model = None
+        if self.model_aggregator == ModelAggregatorType.FED_AVG:
+            agg_model = FedAvg().aggregate(training_responses, clients_state)
+        return agg_model
 
-    def stop_condition(self, clients_metrics : list[Metrics]) -> bool:
-        accuracies = []
-        for client_metrics in clients_metrics:
-            accuracies.append(client_metrics.get_metric(MetricType.ACCURACY))
-        mean_acc = float(np.mean(np.array(accuracies)))
-        self.logger.info(f'mean_accuracy: {mean_acc}\n')
+    def aggregate_metrics(self, clients_metrics : list[Metrics]) -> float:
+        agg_metric = 0.0
+        if self.metric_name == MetricType.ACCURACY:
+            agg_metric = AccuracyAggregator().aggregate(clients_metrics)
+        return agg_metric
+
+    def stop_condition(self, agg_metric : float) -> bool:
+        self.logger.info(f'{self.metric_name}: {agg_metric}\n')
         print(Color.GREEN +
-              f'mean accuracy on round {self.current_round} was {mean_acc}\n' + Color.RESET)
-        self.accuracies_by_round.append(mean_acc)
-        if "stop_acc" in self.server_args["stop_acc"]:
-            stop_acc = self.server_args["stop_acc"]
-            if mean_acc >= stop_acc:
-                return True
+              f'{self.metric_name} on round {self.current_round} was {agg_metric}\n' + Color.RESET)
+        self.agg_metric_by_round.append(agg_metric)
+        if agg_metric >= self.metric_stop_value:
+            return True
+        else:
+            if agg_metric >= self.best_agg_metric:
+                self.best_agg_metric = agg_metric
+                self.best_model = self.last_model
             else:
-                if mean_acc >= self.best_acc:
-                    self.best_acc = mean_acc
-                    self.best_model = self.last_model
-                else:
-                    self.no_improvement_counter += 1
-                    if "early_stop" in self.server_args:
-                        if self.no_improvement_counter >= self.server_args["early_stop"]:
-                            return True
+                self.no_improvement_counter += 1
+                if "early_stop" in self.server_args:
+                    if self.no_improvement_counter >= self.server_args["early_stop"]:
+                        return True
         return False
 
     def run(self):
         super().start_communication_loop()
         self.logger.info(f'starting server {super().get_node_id()}...')
         print(Color.BOLD_START + f'starting node {super().get_node_id()}...' + Color.BOLD_END)
-        super().publish_to('minifed/autoWaitContinue', json.dumps({'continue': True}))
+        #super().publish_to('minifed/autoWaitContinue', json.dumps({'continue': True}))
 
         self.spnfl_logger.info("INIT_EXPERIMENT")
 
@@ -183,7 +213,8 @@ class Server(FedNode):
         # begin training
         selected_qtd = 0
         round_times = []  # lista para armazenar o tempo de cada round
-        while self.current_round <= self.num_rounds:
+        stop_fed = False
+        while self.current_round <= self.num_rounds and not stop_fed:
             round_start_time = time.time()  # início do round
             self.current_round += 1
             self.training_responses = []
@@ -235,7 +266,7 @@ class Server(FedNode):
             self.spnfl_logger.info(f'T_AGGREG_START')
 
             # aggregate and send
-            self.last_model = self.aggregate(self.training_responses, self.fed_clients)
+            self.last_model = self.aggregate_model(self.training_responses, self.fed_clients)
 
             agg_model_data = TrainingData(super().get_node_id(), True, self.current_round, self.last_model)
 
@@ -263,9 +294,21 @@ class Server(FedNode):
             for fed_client in self.fed_clients.values():
                 clients_metrics.append(fed_client.get_metrics_for_round(self.current_round))
 
+            agg_metric = self.aggregate_metrics(clients_metrics)
             # spnfl_logger.info(f'T_COMPUTE_START')
 
-            stop_fed = self.stop_condition(clients_metrics)
+            stop_fed = self.stop_condition(agg_metric)
+
+            self.spnfl_logger.info(f'T_SAVE_START')
+            with open(self.last_model_file, "w", encoding="utf-8") as f:
+                json.dump(self.last_model, f, ensure_ascii=False, indent=2)
+            self.spnfl_logger.info(f'T_SAVE_END')
+
+            if stop_fed:
+                self.spnfl_logger.info(f'T_SAVE_START')
+                with open(self.best_model_file, "w", encoding="utf-8") as f:
+                    json.dump(self.best_model, f, ensure_ascii=False, indent=2)
+                self.spnfl_logger.info(f'T_SAVE_END')
 
             # calcular tempo do round e estimar tempo restante
             round_end_time = time.time()
@@ -279,37 +322,12 @@ class Server(FedNode):
                 print(
                     Color.BLUE + f"Estimated time remaining until the end of the experiment: {mins}m {secs}s" + Color.RESET)
 
-            #super().get_spnfl_logger().info(f'T_SAVE_START')
-            #if mean_acc >= best_acc:
-            #    best_model = controller.get_global_model()
-            #    best_acc = mean_acc
-            #super().get_spnfl_logger().info(f'T_SAVE_END')
-
             self.spnfl_logger.info(f'ROUND_DURATION {round_duration}')
-
-            # update stop queue or continue process
-            if stop_fed:
-                with open(self.saved_model_file, "w", encoding="utf-8") as f:
-                    json.dump(best_model, f, ensure_ascii=False, indent=2)
-                # spnfl_logger.info(f'T_SAVE_END')
-
-
-                super().publish_to(FedTopics.STOP, None)
-                time.sleep(1)  # time for clients to finish
-                # spnfl_logger.info(f'T_COMPUTE_END')
-                self.spnfl_logger.info(f'END_ROUND {self.current_round}')
-                exit()
-
-            # spnfl_logger.info(f'T_SAVE_END')
-            # spnfl_logger.info(f'T_COMPUTE_END')
             self.spnfl_logger.info(f'END_ROUND {self.current_round}')
 
-        # spnfl_logger.info(f'T_SAVE_START')
-        with open(self.saved_model_file, "w", encoding="utf-8") as f:
-            json.dump(self.best_model, f, ensure_ascii=False, indent=2)
-        # spnfl_logger.info(f'T_SAVE_END')
-
-        self.logger.info('stop_condition: rounds')
-        print(Color.RED + f'rounds threshold met! stopping the training!' + Color.RESET)
+        self.logger.info('stop condition was met')
+        self.logger.info(f'{self.current_round} rounds were executed')
+        print(Color.RED + f'stop condition was met!' + Color.RED)
+        print(Color.YELLOW + f'{self.current_round} rounds were executed' + Color.YELLOW)
         super().publish_to(FedTopics.STOP, None)
         super().stop_communication_loop()

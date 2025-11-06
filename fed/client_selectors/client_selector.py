@@ -2,6 +2,8 @@ from abc import abstractmethod
 
 from fed.client_state import ClientState
 
+class ClientSelectorType:
+    ALL_CLIENTS = "all_clients"
 
 class ClientSelector:
 

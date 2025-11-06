@@ -1,11 +1,11 @@
 import numpy as np
 from numpy import ndarray
 
-from fed.aggregators.aggregator import Aggregator
+from fed.model_aggregators.model_aggregator import ModelAggregator
 from fed.client_state import ClientState
 from fed.training_data import TrainingData
 
-class FedAvg(Aggregator):
+class FedAvg(ModelAggregator):
     def aggregate(self, training_responses: list[TrainingData], clients_state : dict[str, ClientState]) -> list[ndarray]:
         all_trainer_samples = []
         all_weights = []
