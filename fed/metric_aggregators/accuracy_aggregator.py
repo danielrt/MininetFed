@@ -1,7 +1,7 @@
 import numpy as np
 
 from fed.metrics import Metrics, MetricType
-from fed.metrics_aggregators.metric_aggregator import MetricAggregator
+from fed.metric_aggregators.metric_aggregator import MetricAggregator
 
 class AccuracyAggregator(MetricAggregator):
     def aggregate(self, clients_metrics: list[Metrics]) -> float:

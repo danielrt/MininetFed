@@ -7,7 +7,7 @@ import json
 
 from fed.client_acceptors.client_acceptor import ClientAcceptorType
 from fed.client_selectors.client_selector import ClientSelectorType
-from fed.metrics_aggregators.accuracy_aggregator import AccuracyAggregator
+from fed.metric_aggregators.accuracy_aggregator import AccuracyAggregator
 from fed.model_aggregators.fedavg import FedAvg
 from fed.client_acceptors.all_clients_acceptor import AllClientsAcceptor
 from fed.client_info import ClientInfo
