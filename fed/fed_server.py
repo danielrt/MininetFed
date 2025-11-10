@@ -1,7 +1,5 @@
 import logging
 import time
-
-import numpy as np
 from numpy import ndarray
 import json
 
@@ -21,7 +19,7 @@ from fed.dataset_info import DatasetInfo
 from fed.utils import Color
 
 
-class Server(FedNode):
+class FedServer(FedNode):
     def __init__(self):
         super().__init__()
         self.best_model_file = ""

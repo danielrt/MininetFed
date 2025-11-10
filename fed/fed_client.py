@@ -14,7 +14,7 @@ from fed.dataset_info import DatasetInfo
 from fed.utils import Color
 
 
-class Client(FedNode):
+class FedClient(FedNode):
     def __init__(self):
         super().__init__()
         self.client_id : str = ""

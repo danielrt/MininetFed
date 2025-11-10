@@ -60,7 +60,6 @@ class FedNode:
         for topic in topics:
             self.mqtt_client.subscribe(topic)
 
-    @abstractmethod
     def get_topics_to_subscribe(self) -> list[FedTopics]:
         pass
 

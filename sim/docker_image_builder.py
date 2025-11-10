@@ -3,7 +3,6 @@ import os
 import tarfile
 import textwrap
 import hashlib
-import shutil
 from pathlib import Path
 import docker
 
@@ -174,7 +173,7 @@ def docker_image_exists(tag: str) -> bool:
     client = docker.from_env()
     return _image_exists(client, tag)
 
-def build_docker_image(name: str, requirements_file: str) -> dict:
+def build_fed_node_docker_image(name: str, requirements_file: str) -> dict:
     """
     Constrói/atualiza a imagem 'mininetfed:{name}' a partir de ubuntu:focal, instalando:
       - net-tools, iputils-ping, iproute2, software-properties-common, deadsnakes/py3.10, pip/venv
@@ -292,6 +291,74 @@ def build_docker_image(name: str, requirements_file: str) -> dict:
             _add_file(tar, exec_info["path"], "exec_vendor/fed_node_executor", mode=0o755)
         else:  # shim
             _add_bytes(tar, "exec_vendor/fed_node_executor", exec_info["text"].encode("utf-8"), mode=0o755)
+
+    mem_tar.seek(0)
+
+    exists_before = _image_exists(client, tag)
+    action = "rebuilt" if exists_before else "created"
+
+    image, logs = client.images.build(
+        fileobj=mem_tar,
+        custom_context=True,
+        rm=True,
+        pull=True,
+        tag=tag,
+        decode=True,
+    )
+    for chunk in logs:
+        line = chunk.get("stream") or chunk.get("status") or chunk.get("error")
+        if line:
+            print(line, end="")
+
+    print(f"\n[ok] Imagem '{tag}' {action}.")
+    return {"tag": tag, "action": action}
+
+def build_fed_broker_docker_image(external : bool = False) -> dict:
+    """
+    Constrói/atualiza a imagem 'mininetfed:{name}' a partir de ubuntu:focal, instalando:
+      - net-tools, iputils-ping, iproute2, software-properties-common, deadsnakes/py3.10, pip/venv
+      - requirements do host
+      - pacote 'fed' a partir da instalação do host
+      - script 'fed_node_executor' para /usr/local/bin/fed_node_executor (executável)
+
+    Idempotência via LABELs:
+      - req.sha256  : hash do requirements_file
+      - fed.sha256  : hash do diretório do pacote 'fed' no host (apenas .py etc.)
+      - exec.sha256 : hash do script executor (arquivo ou shim gerado)
+
+    Retorna: {"tag": str, "action": "skipped"|"rebuilt"|"created"}
+    """
+    tag = f"mininetfed:broker"
+
+    client = docker.from_env()
+
+    if external:
+        dockerfile = textwrap.dedent(f"""\
+            FROM eclipse-mosquitto
+            ENV DEBIAN_FRONTEND=noninteractive
+    
+            EXPOSE 1883
+            EXPOSE 9001
+    
+            CMD ["/bin/sh", "-c", "bash"]
+        """).strip("\n")
+    else:
+        dockerfile = textwrap.dedent(f"""\
+            FROM eclipse-mosquitto
+            ENV DEBIAN_FRONTEND=noninteractive
+
+            EXPOSE 1883
+            EXPOSE 8883
+
+            CMD ["/bin/sh", "-c", "bash"]
+        """).strip("\n")
+
+    # Contexto de build: Dockerfile, requirements, fed, executor
+    mem_tar = io.BytesIO()
+    with tarfile.open(fileobj=mem_tar, mode="w") as tar:
+        # Dockerfile
+        _add_bytes(tar, "Dockerfile", dockerfile.encode("utf-8"))
+
 
     mem_tar.seek(0)
 
