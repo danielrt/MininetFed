@@ -32,11 +32,12 @@ class DockerFedNode(Docker):
     def run(self, broker_addr):
         pass
 
-class FedServer(DockerFedNode):
+class FedServerNode(DockerFedNode):
     """Node that represents a docker container of a MininerFed server."""
     def __init__(self, node_id : str, script: str, server_folder : str, dimage = None, server_args : dict | None = None):
         super().__init__( node_id = node_id, script = script, node_folder = server_folder, dimage = dimage, node_args = server_args)
         self.cmd("ifconfig eth0 down")
+        # TODO: quando script não for passado como parametro, tem que executar a classe FedServer do Sim
 
     def run(self, broker_addr):
         cmd = f"""bash -c "umask 000; fed_node_executor --file {self.script} --node_id {self.node_id} --broker_addr {broker_addr} --node_args-json {json.dumps(self.args)}  2> err.txt """
@@ -44,7 +45,7 @@ class FedServer(DockerFedNode):
         os.umask(0o000)
         makeTerm(self, cmd=cmd)
 
-class FedClient(DockerFedNode):
+class FedClientNode(DockerFedNode):
     """Node that represents a docker container of a MininerFed server."""
     def __init__(self, node_id : str, script: str, client_folder : str, dimage, client_args : dict | None = None):
         super().__init__( node_id = node_id, script = script, node_folder = client_folder, dimage = dimage, node_args = client_args)
@@ -55,7 +56,7 @@ class FedClient(DockerFedNode):
         self.cmd("route add default gw %s" % broker_addr)
         makeTerm(self, cmd=cmd)
 
-class FedBroker(DockerFedNode):
+class FedBrokerNode(DockerFedNode):
     """Node that represents a docker container of a MininerFed broker."""
     def __init__(self, broker_id : str, script: str, broker_folder : str, dimage, broker_args : dict | None = None):
         super().__init__( node_id = broker_id, script = script, node_folder = broker_folder, dimage = dimage, node_args = broker_args)
