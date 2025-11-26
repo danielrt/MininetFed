@@ -332,26 +332,18 @@ def build_fed_broker_docker_image(external : bool = False) -> dict:
 
     client = docker.from_env()
 
-    if external:
-        dockerfile = textwrap.dedent(f"""\
-            FROM eclipse-mosquitto
-            ENV DEBIAN_FRONTEND=noninteractive
-    
-            EXPOSE 1883
-            EXPOSE 9001
-    
-            CMD ["/bin/sh", "-c", "bash"]
-        """).strip("\n")
-    else:
-        dockerfile = textwrap.dedent(f"""\
-            FROM eclipse-mosquitto
-            ENV DEBIAN_FRONTEND=noninteractive
+    if _image_exists(client, tag):
+        return {"tag": tag, "action": "skipped"}
 
-            EXPOSE 1883
-            EXPOSE 8883
+    dockerfile = textwrap.dedent(f"""\
+        FROM eclipse-mosquitto
+        ENV DEBIAN_FRONTEND=noninteractive
 
-            CMD ["/bin/sh", "-c", "bash"]
-        """).strip("\n")
+        EXPOSE 1883
+        EXPOSE 8883
+
+        CMD ["/bin/sh", "-c", "bash"]
+    """).strip("\n")
 
     # Contexto de build: Dockerfile, requirements, fed, executor
     mem_tar = io.BytesIO()
@@ -359,11 +351,7 @@ def build_fed_broker_docker_image(external : bool = False) -> dict:
         # Dockerfile
         _add_bytes(tar, "Dockerfile", dockerfile.encode("utf-8"))
 
-
     mem_tar.seek(0)
-
-    exists_before = _image_exists(client, tag)
-    action = "rebuilt" if exists_before else "created"
 
     image, logs = client.images.build(
         fileobj=mem_tar,
@@ -378,5 +366,5 @@ def build_fed_broker_docker_image(external : bool = False) -> dict:
         if line:
             print(line, end="")
 
-    print(f"\n[ok] Imagem '{tag}' {action}.")
-    return {"tag": tag, "action": action}
+    print(f"\n[ok] Imagem '{tag}' created.")
+    return {"tag": tag, "action": "created"}
