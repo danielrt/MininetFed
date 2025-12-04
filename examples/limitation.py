@@ -5,8 +5,8 @@ from pathlib import Path
 from time import sleep
 from mininet.log import info, setLogLevel
 from containernet.link import TCLink
-from core.net import MininetFed
-from core.node import Server, Client
+from mininetfed.core import MininetFed
+from mininetfed.core import Server, Client
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 volume = "/flw"

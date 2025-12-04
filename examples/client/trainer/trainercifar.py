@@ -13,7 +13,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 class TrainerCifar:
     def __init__(self, id, mode) -> None:
-        # id and model
+        # id and dto
         self.id = id
         self.mode = mode # 'class' 'random' 'all'
         self.model = self.define_model()

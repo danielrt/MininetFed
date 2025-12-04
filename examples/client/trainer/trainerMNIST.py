@@ -11,7 +11,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 class TrainerMINIST:
     def __init__(self, num_id, mode) -> None:
-        # id and model
+        # id and dto
         self.num_id = num_id
         self.mode = mode
         self.model = self.define_model()

@@ -167,7 +167,7 @@ def server():
 
     # best accuracy so far
     best_acc = 0
-    # best model so far
+    # best dto so far
     best_model = None
 
     spnfl_logger.info("T_ARRIVAL_START")

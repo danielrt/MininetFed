@@ -91,7 +91,7 @@ class TrainerMNIST:
         # self.mode = mode  # 'class' 'random' 'all'
         self.__dict__.update(args)
         mode = self.mode
-        # define model
+        # define dto
         self.model = self.define_model()
 
         # split data

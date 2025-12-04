@@ -343,7 +343,7 @@ class TrainerCkksfed():
             # differential_garantee_pytorch(delta,self.sketch,self.desired_episilon,self.percentile)
             self.sketch_list = [i.tolist() if type(
                 i) != list else i for i in self.sketch]
-        # return model, loss.item()
+        # return dto, loss.item()
 
     def eval_model(self):
         model = self.model
@@ -406,7 +406,7 @@ class TrainerCkksfed():
 
     def get_weights(self):
         # print("Pesos Enviados",file=sys.stderr)
-        # print(list(get_params(self.model).values()),file=sys.stderr)
+        # print(list(get_params(self.dto).values()),file=sys.stderr)
         if self.fedsketch:
             weights = self.sketch_list
         else:
@@ -428,7 +428,7 @@ class TrainerCkksfed():
             w = [torch.from_numpy(x) for x in weights]
             set_params_fedsketch(self.model, dict(zip(self.model_keys, w)))
         # print("Pesos Atualizados",file=sys.stderr)
-        # print(list(get_params(self.model).values()),file=sys.stderr)
+        # print(list(get_params(self.dto).values()),file=sys.stderr)
 
     def agg_response_extra_info(self, agg_response):
         if self.args['encrypted']:
@@ -492,12 +492,12 @@ class TrainerCkksfed():
     #     data_matrix = abs(data_matrix)
     #     print(data_matrix)
     #     print(data_matrix.shape)
-    #     model = AgglomerativeClustering(
+    #     dto = AgglomerativeClustering(
     #         metric='precomputed', n_clusters=args['n_clusters'], linkage='complete').fit(data_matrix)
 
     #     self.cluster.clear()
-    #     my_cluster_num = model.labels_[pos_dict[self.id_name]]
-    #     for idx, cluster_num in enumerate(model.labels_):
+    #     my_cluster_num = dto.labels_[pos_dict[self.id_name]]
+    #     for idx, cluster_num in enumerate(dto.labels_):
     #         if cluster_num == my_cluster_num:
     #             self.cluster.append(name_dict[idx])
 

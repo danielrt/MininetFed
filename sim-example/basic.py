@@ -1,6 +1,6 @@
-from sim.docker_image_builder import build_fed_node_docker_image
-from sim.net import MininetFed
-from sim.nodes import FedServerNode, FedClientNode
+from mininetfed.sim.util.docker_utils import build_fed_node_docker_image
+from mininetfed.sim import MininetFed
+from mininetfed.sim.nodes import FedServerNode, FedClientNode
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 volume = "/flw"
