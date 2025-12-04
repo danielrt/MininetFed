@@ -31,27 +31,37 @@ def _sha256_dir(root: Path, ignore_ext={".pyc"}, ignore_names={"__pycache__"}):
                     h.update(chunk)
     return h.hexdigest()
 
-def _find_fed_on_host():
+def _find_mininetfed_on_host():
     """
-    Retorna (pkg_dir, dist_info_dir or None, dist_info_name or None, sha_dir)
+    Retorna (pkg_root, dist_info_dir or None, dist_info_name or None, sha_dir)
+
+    Onde:
+      - pkg_root = diretório da pasta 'mininetfed' no host
+      - sha_dir  = hash do conteúdo dessa pasta (usado em LABEL)
     """
     import importlib
     import importlib.metadata as md
     import pathlib
 
     try:
-        dist = md.distribution("core")
+        dist = md.distribution("mininetfed-core")
         version = dist.version
     except md.PackageNotFoundError as e:
-        raise RuntimeError("Pacote 'core' não encontrado no host. Instale-o (pip install core).") from e
+        raise RuntimeError(
+            "Pacote 'mininetfed-core' não encontrado no host. "
+            "Instale-o (por ex: pip install mininetfed-core)."
+        ) from e
 
-    mod = importlib.import_module("core")
-    pkg_dir = pathlib.Path(mod.__file__).resolve().parent
+    # Importa o módulo Python e descobre o caminho no disco
+    mod = importlib.import_module("mininetfed.core")
+    core_dir = pathlib.Path(mod.__file__).resolve().parent  # .../mininetfed/core
+    pkg_root = core_dir.parent                              # .../mininetfed
 
+    # Tenta achar o .dist-info correspondente (opcional)
     dist_info_dir = None
     dist_info_name = None
-    parent = pkg_dir.parent
-    for cand in parent.glob("core-*.dist-info"):
+    parent = pkg_root.parent
+    for cand in parent.glob("mininetfed_core-*.dist-info"):
         try:
             meta = (cand / "METADATA").read_text(encoding="utf-8", errors="ignore")
             if f"Version: {version}" in meta:
@@ -61,20 +71,25 @@ def _find_fed_on_host():
         except Exception:
             pass
 
-    sha_dir = _sha256_dir(pkg_dir)
-    return pkg_dir, dist_info_dir, dist_info_name, sha_dir
+    sha_dir = _sha256_dir(pkg_root)
+    return pkg_root, dist_info_dir, dist_info_name, sha_dir
 
-def _find_executor_on_host():
+
+def _find_mininetfed_node_executor_on_host():
     """
-    Tenta localizar o executável 'fed_node_executor' no PATH.
-    Se não encontrar, tenta resolver via entry_points e gera um shim.
-    Retorna um dict:
-      {"mode":"file","path":Path,"sha":str}  OU  {"mode":"shim","text":str,"sha":str}
+    Localiza o executável 'mininetfed-node-executor' no PATH
+    ou gera um shim via entry_point.
+    Retorna:
+      {"mode":"file","path":Path,"sha":str}
+      ou
+      {"mode":"shim","text":str,"sha":str}
     """
     from importlib import metadata as md
     import shutil as _shutil
 
-    exe = _shutil.which("fed_node_executor")
+    exe_name = "mininetfed-node-executor"
+
+    exe = _shutil.which(exe_name)
     if exe:
         p = Path(exe).resolve()
         return {"mode": "file", "path": p, "sha": _sha256_file(p)}
@@ -82,18 +97,18 @@ def _find_executor_on_host():
     # tenta via entry points (console_scripts)
     try:
         eps = md.entry_points()
-        # API nova: eps.select(group="console_scripts")
-        candidates = []
         try:
             candidates = list(eps.select(group="console_scripts"))
         except Exception:
             candidates = [ep for ep in eps if getattr(ep, "group", "") == "console_scripts"]
+
         target = None
         for ep in candidates:
-            if ep.name == "fed_node_executor":
-                # valor tipicamente "pkg.module:main"
+            if ep.name == exe_name:
+                # tipicamente "mininetfed.bin.mininetfed_node_executor:main"
                 target = ep.value
                 break
+
         if target:
             module, func = target.split(":")
             shim = textwrap.dedent(f"""\
@@ -109,8 +124,10 @@ def _find_executor_on_host():
         pass
 
     raise RuntimeError(
-        "Não foi possível localizar o 'fed_node_executor' no host (PATH) nem via entry_points 'console_scripts'."
+        "Não foi possível localizar o 'mininetfed-node-executor' no host "
+        "(PATH ou entry_points 'console_scripts')."
     )
+
 
 def _add_bytes(tar: tarfile.TarFile, arcname: str, data: bytes, mode: int = 0o644):
     info = tarfile.TarInfo(arcname)
@@ -194,13 +211,13 @@ def build_fed_node_docker_image(name: str, requirements_file: str) -> dict:
         raise FileNotFoundError(f"requirements_file não encontrado: {req_path}")
 
     req_sha = _sha256_file(req_path)
-    fed_pkg_dir, fed_dist_info_dir, fed_dist_info_name, fed_sha = _find_fed_on_host()
-    exec_info = _find_executor_on_host()  # {"mode": "file"/"shim", ...}
+    fed_pkg_dir, fed_dist_info_dir, fed_dist_info_name, fed_sha = _find_mininetfed_on_host()
+    exec_info = _find_mininetfed_node_executor_on_host()  # {"mode": "file"/"shim", ...}
     exec_sha = exec_info["sha"]
 
     desired_labels = {
         "req.sha256": req_sha,
-        "core.sha256": fed_sha,
+        "mininetfed.sha256": fed_sha,
         "exec.sha256": exec_sha,
         "build.tool": "docker-py",
     }
@@ -219,7 +236,7 @@ def build_fed_node_docker_image(name: str, requirements_file: str) -> dict:
 
         # ===== Labels de controle/idempotência =====
         LABEL req.sha256="{req_sha}"
-        LABEL core.sha256="{fed_sha}"
+        LABEL mininetfed.sha256="{fed_sha}"
         LABEL exec.sha256="{exec_sha}"
         LABEL build.tool="docker-py"
 
@@ -261,13 +278,13 @@ def build_fed_node_docker_image(name: str, requirements_file: str) -> dict:
         RUN python3.10 -m pip install --no-cache-dir -r /tmp/requirements.txt
 
         # Copiar 'core' (host -> imagem)
-        RUN mkdir -p /usr/local/lib/python3.10/site-packages
-        COPY fed_vendor/core /usr/local/lib/python3.10/site-packages/core
-        {"COPY fed_vendor/" + fed_dist_info_name + " /usr/local/lib/python3.10/site-packages/" + fed_dist_info_name if fed_dist_info_name else ""}
+        RUN mkdir -p /usr/local/lib/python3.10/dist-packages
+        COPY fed_vendor/mininetfed /usr/local/lib/python3.10/dist-packages/mininetfed
+        {"COPY fed_vendor/" + fed_dist_info_name + " /usr/local/lib/python3.10/dist-packages/" + fed_dist_info_name if fed_dist_info_name else ""}
 
-        # Instalar o executável fed_node_executor
-        COPY exec_vendor/fed_node_executor /usr/local/bin/fed_node_executor
-        RUN chmod +x /usr/local/bin/fed_node_executor
+        # Instalar o executável mininetfed-node-executor
+        COPY exec_vendor/mininetfed-node-executor /usr/local/bin/mininetfed-node-executor
+        RUN chmod +x /usr/local/bin/mininetfed-node-executor
 
         EXPOSE 1883
         EXPOSE 8883
@@ -283,14 +300,14 @@ def build_fed_node_docker_image(name: str, requirements_file: str) -> dict:
         # requirements
         _add_file(tar, req_path, "requirements.txt")
         # core
-        _add_dir_recursive(tar, fed_pkg_dir, "fed_vendor/core")
+        _add_dir_recursive(tar, fed_pkg_dir, "fed_vendor/mininetfed")
         if fed_dist_info_dir and fed_dist_info_name:
             _add_dir_recursive(tar, fed_dist_info_dir, f"fed_vendor/{fed_dist_info_name}")
         # executor
         if exec_info["mode"] == "file":
-            _add_file(tar, exec_info["path"], "exec_vendor/fed_node_executor", mode=0o755)
+            _add_file(tar, exec_info["path"], "exec_vendor/mininetfed-node-executor", mode=0o755)
         else:  # shim
-            _add_bytes(tar, "exec_vendor/fed_node_executor", exec_info["text"].encode("utf-8"), mode=0o755)
+            _add_bytes(tar, "exec_vendor/mininetfed-node-executor", exec_info["text"].encode("utf-8"), mode=0o755)
 
     mem_tar.seek(0)
 
