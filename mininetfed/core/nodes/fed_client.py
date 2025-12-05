@@ -51,6 +51,12 @@ class FedClient(FedNode):
     def evaluate(self) -> Metrics:
         pass
 
+    def get_client_id(self) -> str:
+        return self.client_id
+
+    def get_client_folder(self) -> str:
+        return self.client_folder
+
     def get_topics_to_subscribe(self) -> list[FedTopics]:
         return [FedTopics.CLIENT_SELECTION, FedTopics.CLIENT_ACCEPTED,
                   FedTopics.SERVER_WEIGHTS, FedTopics.STOP]

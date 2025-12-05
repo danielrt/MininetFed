@@ -8,7 +8,7 @@ setup(
     # O código dos pacotes está um nível acima (../mininetfed)
     package_dir={"": ".."},
     packages=[
-        "mininetfed",          # garante o namespace raiz
+        "mininetfed",
         "mininetfed.sim",
         "mininetfed.sim.util", # ajuste / acrescente se tiver mais subpacotes
     ],
