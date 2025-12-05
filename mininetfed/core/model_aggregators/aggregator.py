@@ -5,9 +5,6 @@ from numpy import ndarray
 from mininetfed.core.dto.client_state import ClientState
 from mininetfed.core.dto.training_data import TrainingData
 
-class AggregatorType:
-    FED_AVG = "fed_avg"
-
 class Aggregator:
 
     @abstractmethod

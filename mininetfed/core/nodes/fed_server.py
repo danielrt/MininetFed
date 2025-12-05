@@ -3,8 +3,8 @@ import time
 from numpy import ndarray
 import json
 
-from mininetfed.core.client_acceptors.client_acceptor import ClientAcceptorType
-from mininetfed.core.client_selectors.client_selector import ClientSelectorType
+from mininetfed.core.fed_options import MetricType, ServerOptions, AggregatorType, ClientSelectorType, \
+    ClientAcceptorType
 from mininetfed.core.metric_aggregators.accuracy_aggregator import AccuracyAggregator
 from mininetfed.core.model_aggregators.fedavg import FedAvg
 from mininetfed.core.client_acceptors.all_clients_acceptor import AllClientsAcceptor
@@ -12,8 +12,7 @@ from mininetfed.core.dto.client_info import ClientInfo
 from mininetfed.core.client_selectors.all_clients_selector import AllClientsSelector
 from mininetfed.core.dto.client_state import ClientState
 from mininetfed.core.nodes.fed_node import FedNode, FedTopics
-from mininetfed.core.dto.metrics import Metrics, MetricType
-from mininetfed.core.model_aggregators.aggregator import AggregatorType
+from mininetfed.core.dto.metrics import Metrics
 from mininetfed.core.dto.training_data import TrainingData
 from mininetfed.core.dto.dataset_info import DatasetInfo
 from mininetfed.core.utils import Color
@@ -62,24 +61,24 @@ class FedServer(FedNode):
         self.best_model_file = f'{server_folder}/best.model'
         self.server_args = server_args
 
-        required = {"min_trainers", "num_rounds", "stop_value", "metric_type"}
+        required = {ServerOptions.MIN_CLIENTS, ServerOptions.NUM_ROUNDS, ServerOptions.STOP_VALUE}
         missing = required - server_args.keys()
         if missing:
             raise RuntimeError(f"The following server configurations should be provided: {missing}")
         else:
-            self.num_rounds = server_args["num_rounds"]
-            self.min_trainers = server_args["min_trainers"]
-            self.metric_stop_value = server_args["stop_value"]
+            self.num_rounds = server_args[ServerOptions.NUM_ROUNDS]
+            self.min_trainers = server_args[ServerOptions.MIN_CLIENTS]
+            self.metric_stop_value = server_args[ServerOptions.STOP_VALUE]
 
         # optional server args
-        if "metric_name" in server_args:
-            self.metric_name = server_args["metric_name"]
-        if "model_aggregator" in server_args:
-            self.model_aggregator = server_args["model_aggregator"]
-        if "client_acceptor" in server_args:
-            self.client_acceptor = server_args["client_acceptor"]
-        if "client_selector" in server_args:
-            self.client_selector = server_args["client_selector"]
+        if ServerOptions.METRIC in server_args:
+            self.metric_name = server_args[ServerOptions.METRIC]
+        if ServerOptions.MODEL_AGGREGATOR in server_args:
+            self.model_aggregator = server_args[ServerOptions.MODEL_AGGREGATOR]
+        if ServerOptions.CLIENT_ACCEPTOR in server_args:
+            self.client_acceptor = server_args[ServerOptions.CLIENT_ACCEPTOR]
+        if ServerOptions.CLIENT_SELECTOR in server_args:
+            self.client_selector = server_args[ServerOptions.CLIENT_SELECTOR]
 
         # general logger
         log_format = "%(asctime)s - %(infotype)-6s - %(levelname)s - %(message)s"

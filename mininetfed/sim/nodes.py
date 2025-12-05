@@ -14,14 +14,7 @@ from mininetfed.sim.util.docker_utils import docker_image_exists, build_fed_brok
 
 class DockerFedNode(Docker):
     """Node that represents a docker container of a MininerFed server."""
-    def __init__(self, name : str, node_folder : str, dimage : str, node_args : dict | None = None):
-        args = node_args or {}
-
-        # Evita colisão de parâmetros (ex.: se alguém passou 'volumes' dentro de self.args)
-        safe_args = dict(args)
-        safe_args.pop("volumes", None)
-        safe_args.pop("name", None)
-        safe_args.pop("dimage", None)
+    def __init__(self, name : str, node_folder : str, dimage : str, **kwargs):
 
         volumes = [f"{node_folder}:/flw:rw"]
 
@@ -31,15 +24,15 @@ class DockerFedNode(Docker):
         if not docker_image_exists(dimage):
             raise ImageNotFound(f"Image Docker {dimage} was not found.")
 
-        Docker.__init__(self, name=name, dimage=dimage, volumes=volumes, **safe_args)
+        Docker.__init__(self, name=name, dimage=dimage, volumes=volumes, **kwargs)
 
     def run(self, broker_addr):
         pass
 
 class FedClientNode(DockerFedNode):
     """Node that represents a docker container of a MininerFed server."""
-    def __init__(self, name : str, script: str, client_folder : str, dimage : str | None = None, client_args : dict | None = None):
-        super().__init__(name= name, node_folder = client_folder, dimage = dimage, node_args = client_args)
+    def __init__(self, name : str, script: str, client_folder : str, dimage : str | None = None, client_args : dict | None = None, **kwargs):
+        super().__init__(name= name, node_folder = client_folder, dimage = dimage, **kwargs)
         self.script = script
         self.client_id = name
         self.client_args = client_args or {}
@@ -52,7 +45,7 @@ class FedClientNode(DockerFedNode):
 
 class FedServerNode(DockerFedNode):
     """Node that represents a docker container of a MininerFed server."""
-    def __init__(self, name : str, script: str | None = None, server_folder : str | None = None, dimage : str | None = None, server_args : dict | None = None):
+    def __init__(self, name : str, script: str | None = None, server_folder : str | None = None, dimage : str | None = None, server_args : dict | None = None, **kwargs):
         self.server_id = name
         # quando script não for passado como parametro, tem que executar o no server implementacao padrao
         self.script = script or MININETFED_IMAGE_INSTALL_LOCATION + "/core/nodes/default_fed_server.py"
@@ -71,7 +64,7 @@ class FedServerNode(DockerFedNode):
                 f.write(default_server_requirements)
                 server_docker_image = build_fed_node_docker_image("server", f.name)["tag"]
 
-        super().__init__(name= name, node_folder = server_folder, dimage = server_docker_image, node_args = server_args)
+        super().__init__(name= name, node_folder = server_folder, dimage = server_docker_image, **kwargs)
         self.cmd("ifconfig eth0 down")
 
     def run(self, broker_addr):
@@ -82,7 +75,7 @@ class FedServerNode(DockerFedNode):
 
 class FedBrokerNode(DockerFedNode):
     """Node that represents a docker container of a MininerFed broker."""
-    def __init__(self, name : str, broker_folder : str | None = None, dimage : str | None = None, broker_args : dict | None = None):
+    def __init__(self, name : str, broker_folder : str | None = None, dimage : str | None = None, broker_args : dict | None = None, **kwargs):
         self.broker_id = name
         self.script = MININETFED_IMAGE_INSTALL_LOCATION + "/core/nodes/default_fed_broker.py"
         self.broker_folder = broker_folder or Path.cwd() / "broker_output"
@@ -94,7 +87,7 @@ class FedBrokerNode(DockerFedNode):
         if not broker_docker_image:
             broker_docker_image = build_fed_broker_docker_image()["tag"]
 
-        super().__init__(name= name, node_folder = broker_folder, dimage = broker_docker_image, node_args = broker_args)
+        super().__init__(name= name, node_folder = broker_folder, dimage = broker_docker_image, **kwargs)
         self.cmd("iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE")
 
     def run(self, broker_addr = ""):

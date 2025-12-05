@@ -1,6 +1,7 @@
 import numpy as np
 
-from mininetfed.core.dto.metrics import Metrics, MetricType
+from mininetfed.core.dto.metrics import Metrics
+from mininetfed.core.fed_options import MetricType
 from mininetfed.core.metric_aggregators.metric_aggregator import MetricAggregator
 
 class AccuracyAggregator(MetricAggregator):

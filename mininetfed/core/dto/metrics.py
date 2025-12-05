@@ -1,9 +1,6 @@
 import json
 from mininetfed.core.utils import JSONSerializableType
 
-class MetricType:
-    ACCURACY = "accuracy"
-
 class Metrics:
     def __init__(self, client_id : str, metrics : dict[str, JSONSerializableType]):
         self.client_id = client_id
