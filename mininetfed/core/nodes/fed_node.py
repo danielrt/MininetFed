@@ -1,7 +1,9 @@
 from abc import abstractmethod
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 import paho.mqtt.client as mqtt
+
 
 class FedTopics(Enum):
     CLIENT_REGISTER = "client_register"
@@ -13,35 +15,68 @@ class FedTopics(Enum):
     SERVER_WEIGHTS = "server_weights"
     STOP = "stop"
 
+
 class FedNode:
     def __init__(self):
-        self.mqtt_client = None
-        self.node_id : str = ""
-        self.node_folder : str = ""
-        self.node_args : dict | None = None
-        self.subscribed_fed_messages : list[FedTopics] | None = None
+        self.mqtt_client: Optional[mqtt.Client] = None
+        self.node_id: str = ""
+        self.node_folder: str = ""
+        self.node_args: Optional[Dict[str, Any]] = None
+        self.subscribed_fed_messages: Optional[List[FedTopics]] = None
 
-    def configure(self, node_id, broker_addr, node_folder, node_args : dict):
+    def configure(self, node_id, broker_addr, node_folder, node_args: Dict[str, Any]):
         self.node_id = node_id
         self.node_args = node_args
         self.node_folder = node_folder
-        self.mqtt_client = mqtt.Client(node_id)
-        self.mqtt_client.connect(broker_addr, bind_port=1883)
+
+        # ==== Padrão novo: paho-mqtt 2.x, MQTT v5, callback API v2 ====
+        self.mqtt_client = mqtt.Client(
+            client_id=node_id,
+            protocol=mqtt.MQTTv5,  # se quiser manter v3.1.1, pode tirar esse argumento
+        )
+        # ===============================================================
+
+        # Usa 'port', não 'bind_port'
+        self.mqtt_client.connect(host=broker_addr, port=1883)
+
+        # Callbacks
         self.mqtt_client.on_connect = self.on_connect
-        self.mqtt_client.message_callback_add(FedTopics.CLIENT_REGISTER.value, self.on_client_register_super)
-        self.mqtt_client.message_callback_add(FedTopics.CLIENT_READY.value, self.on_client_ready_super)
-        self.mqtt_client.message_callback_add(FedTopics.CLIENT_WEIGHTS.value, self.on_client_weights_super)
-        self.mqtt_client.message_callback_add(FedTopics.CLIENT_METRICS.value, self.on_client_metrics_super)
-        self.mqtt_client.message_callback_add(FedTopics.CLIENT_SELECTION.value, self.on_client_selection_super)
-        self.mqtt_client.message_callback_add(FedTopics.CLIENT_ACCEPTED.value, self.on_client_accepted_super)
-        self.mqtt_client.message_callback_add(FedTopics.SERVER_WEIGHTS.value, self.on_server_weights_super)
-        self.mqtt_client.message_callback_add(FedTopics.STOP.value, self.on_stop)
+        # (opcional) se quiser tratar desconexões:
+        # self.mqtt_client.on_disconnect = self.on_disconnect
+
+        # Registra callbacks específicos para cada tópico
+        self.mqtt_client.message_callback_add(
+            FedTopics.CLIENT_REGISTER.value, self.on_client_register_super
+        )
+        self.mqtt_client.message_callback_add(
+            FedTopics.CLIENT_READY.value, self.on_client_ready_super
+        )
+        self.mqtt_client.message_callback_add(
+            FedTopics.CLIENT_WEIGHTS.value, self.on_client_weights_super
+        )
+        self.mqtt_client.message_callback_add(
+            FedTopics.CLIENT_METRICS.value, self.on_client_metrics_super
+        )
+        self.mqtt_client.message_callback_add(
+            FedTopics.CLIENT_SELECTION.value, self.on_client_selection_super
+        )
+        self.mqtt_client.message_callback_add(
+            FedTopics.CLIENT_ACCEPTED.value, self.on_client_accepted_super
+        )
+        self.mqtt_client.message_callback_add(
+            FedTopics.SERVER_WEIGHTS.value, self.on_server_weights_super
+        )
+        self.mqtt_client.message_callback_add(
+            FedTopics.STOP.value, self.on_stop_super
+        )
 
     def start_communication_loop(self):
-        self.mqtt_client.loop_start()
+        if self.mqtt_client is not None:
+            self.mqtt_client.loop_start()
 
     def stop_communication_loop(self):
-        self.mqtt_client.loop_stop()
+        if self.mqtt_client is not None:
+            self.mqtt_client.loop_stop()
 
     def get_node_id(self):
         return self.node_id
@@ -52,21 +87,41 @@ class FedNode:
     def get_node_args(self):
         return self.node_args
 
-    def publish_to(self, fed_topic : FedTopics, payload : str | None):
-        self.mqtt_client.publish(fed_topic.value, payload)
+    def publish_to(self, fed_topic: FedTopics, payload: Optional[str]):
+        if self.mqtt_client is not None:
+            self.mqtt_client.publish(fed_topic.value, payload)
 
-    def on_connect(self, client, userdata, flags, rc):
+    # ====== Callbacks ======
+
+    # NOVO PADRÃO: com 'properties' extra
+    def on_connect(self, client, userdata, flags, rc, properties=None):
+        """
+        Callback compatível com a API de callbacks v2 (paho-mqtt 2.x).
+        Para MQTT v5, 'properties' é um objeto Properties; para v3.1.1, vem None.
+        """
         topics = self.get_topics_to_subscribe()
         for topic in topics:
-            self.mqtt_client.subscribe(topic)
+            if isinstance(topic, FedTopics):
+                topic_str = topic.value
+            else:
+                topic_str = str(topic)
+            self.mqtt_client.subscribe(topic_str)
 
-    def get_topics_to_subscribe(self) -> list[FedTopics]:
-        pass
+    # (Opcional) também no padrão novo
+    def on_disconnect(self, client, userdata, rc, properties=None):
+        print(f"[FedNode] Desconectado do broker: rc={rc}")
+
+    def get_topics_to_subscribe(self) -> List[FedTopics]:
+        """
+        Subclasses devem sobrescrever este metodo para retornar
+        a lista de tópicos FedTopics a serem assinados.
+        """
+        return []
 
     def on_client_register_super(self, client, userdata, message):
         self.on_client_register(message)
 
-    def on_client_register(self,message):
+    def on_client_register(self, message):
         pass
 
     def on_client_ready_super(self, client, userdata, message):

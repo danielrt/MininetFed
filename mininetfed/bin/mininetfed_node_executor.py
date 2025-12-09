@@ -55,23 +55,29 @@ def find_fednode_classes(module: ModuleType) -> List[Type]:
 
 def ensure_method(obj: Any, name: str) -> None:
     if not hasattr(obj, name) or not callable(getattr(obj, name)):
-        raise AttributeError(f"A classe {obj.__class__.__name__} não implementa o método obrigatório '{name}()'.")
+        raise AttributeError(
+            f"A classe {obj.__class__.__name__} não implementa o método obrigatório '{name}()'."
+        )
 
 
 def call_configure_and_run(
     cls: Type,
-    arg1: str,
-    arg2: str,
-    arg3: str,
-    cfg: Dict[str, Any],
+    node_id: str,
+    broker_addr: str,
+    node_folder: str,
+    node_args: Dict[str, Any],
     init_kwargs: Optional[Dict[str, Any]] = None,
 ) -> None:
+    """
+    Instancia a classe, chama configure(node_id, broker_addr, node_folder, node_args)
+    e depois run().
+    """
     init_kwargs = init_kwargs or {}
     try:
         instance = cls(**init_kwargs)
     except TypeError as e:
         raise TypeError(
-            f"Falha ao instanciar {cls.__name__} sem/with kwargs {init_kwargs}. "
+            f"Falha ao instanciar {cls.__name__} com kwargs {init_kwargs}. "
             f"Se a classe exige argumentos no __init__, passe via --init-json. Erro: {e}"
         )
 
@@ -80,19 +86,19 @@ def call_configure_and_run(
     ensure_method(instance, "run")
 
     # Opcional: validar assinatura de configure (4 args: str, str, str, dict)
-    # Não impedimos execução se divergir, mas avisamos.
     try:
         sig = inspect.signature(instance.configure)  # type: ignore[attr-defined]
         if len(sig.parameters) != 5:  # self + 4 parâmetros
             print(
                 f"[aviso] configure() de {cls.__name__} tem {len(sig.parameters)-1} parâmetros de usuário, "
-                "esperado: 4 (str, str, str, dict). Tentando assim mesmo..."
+                "esperado: 4 (node_id: str, broker_addr: str, node_folder: str, node_args: dict). "
+                "Tentando assim mesmo..."
             )
     except Exception:
         pass
 
     print(f"→ Executando {cls.__name__}.configure(...)")
-    instance.configure(arg1, arg2, arg3, cfg)  # type: ignore[attr-defined]
+    instance.configure(node_id, broker_addr, node_folder, node_args)  # type: ignore[attr-defined]
 
     print(f"→ Executando {cls.__name__}.run()")
     instance.run()  # type: ignore[attr-defined]
@@ -100,38 +106,55 @@ def call_configure_and_run(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Carrega um .py, detecta classes que herdam de FedNode, e executa configure(...) e run()."
+        description=(
+            "Carrega um .py, detecta classes que herdam de FedNode, e executa "
+            "configure(node_id, broker_addr, node_folder, node_args: dict) e run()."
+        )
     )
     parser.add_argument("--file", required=True, help="Caminho do arquivo .py que contém a(s) classe(s).")
     parser.add_argument("--class", dest="class_name", help="Nome da classe a executar (opcional).")
     parser.add_argument("--all", action="store_true", help="Executa todas as classes encontradas (default: não).")
 
-    # Argumentos para configure(str, str, str, dict)
-    parser.add_argument("--node_id", default="", help="O nome a ser dado ao core node")
-    parser.add_argument("--broker_addr", default="", help="O endereço do broker")
-    parser.add_argument("--node_folder", default="", help="Pasta onde estão localizados os scripts de implementação do core node. O core node deve ler/escrever dados a partir desse local")
+    # Argumentos para configure(node_id, broker_addr, node_folder, node_args)
+    parser.add_argument("--node_id", default="", help="O nome a ser dado ao core node.")
+    parser.add_argument("--broker_addr", default="", help="O endereço do broker.")
+    parser.add_argument(
+        "--node_folder",
+        default="",
+        help=(
+            "Pasta onde estão localizados os scripts de implementação do core node. "
+            "O core node deve ler/escrever dados a partir desse local."
+        ),
+    )
     parser.add_argument(
         "--node_args-json",
+        dest="node_args_json",
         default="{}",
-        help="Dict em JSON contendo os parâmetros do core node. Ex: '{\"num_rounds\": 100, \"num_trainers\": 10}'.",
+        help=(
+            "Dict em JSON contendo os parâmetros do core node. "
+            "Ex: '{\"num_rounds\": 100, \"num_trainers\": 10}'."
+        ),
     )
 
     # Caso a classe exija kwargs no __init__
     parser.add_argument(
         "--init-json",
+        dest="init_json",
         default="{}",
         help="Kwargs em JSON para passar no construtor da classe. Ex: '{\"device\": \"cuda\"}'.",
     )
 
     args = parser.parse_args()
 
+    # Parse de node_args-json
     try:
-        cfg = json.loads(args.cfg_json)
-        if not isinstance(cfg, dict):
-            raise ValueError("--cfg-json precisa ser um objeto JSON (dict).")
+        node_args = json.loads(args.node_args_json)
+        if not isinstance(node_args, dict):
+            raise ValueError("--node_args-json precisa ser um objeto JSON (dict).")
     except json.JSONDecodeError as e:
-        raise SystemExit(f"Erro ao parsear --cfg-json: {e}")
+        raise SystemExit(f"Erro ao parsear --node_args-json: {e}")
 
+    # Parse de init-json
     try:
         init_kwargs = json.loads(args.init_json)
         if not isinstance(init_kwargs, dict):
@@ -146,13 +169,13 @@ def main():
         raise SystemExit("Nenhuma classe que herda de 'FedNode' foi encontrada nesse arquivo.")
 
     # Filtra por nome, se fornecido
-    selected: List[Type]
     if args.class_name:
         selected = [c for c in classes if c.__name__ == args.class_name]
         if not selected:
             found = ", ".join(c.__name__ for c in classes)
             raise SystemExit(
-                f"Classe '{args.class_name}' não encontrada entre as subclasses de FedNode neste arquivo. Encontradas: {found}"
+                f"Classe '{args.class_name}' não encontrada entre as subclasses de FedNode neste arquivo. "
+                f"Encontradas: {found}"
             )
     else:
         if args.all:
@@ -168,7 +191,14 @@ def main():
 
     for cls in selected:
         print(f"\n=== Classe selecionada: {cls.__name__} ===")
-        call_configure_and_run(cls, args.arg1, args.arg2, args.arg3, cfg, init_kwargs)
+        call_configure_and_run(
+            cls,
+            node_id=args.node_id,
+            broker_addr=args.broker_addr,
+            node_folder=args.node_folder,
+            node_args=node_args,
+            init_kwargs=init_kwargs,
+        )
 
 
 if __name__ == "__main__":

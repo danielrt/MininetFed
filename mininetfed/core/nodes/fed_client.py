@@ -67,7 +67,7 @@ class FedClient(FedNode):
         self.client_id = client_id
 
         # logger geral
-        log_format = "%(asctime)s - %(infotype)-6s - %(levelname)s - %(message)s"
+        log_format = "%(asctime)s - %(levelname)s - %(message)s"
         self.logger = logging.getLogger("client")
         self.logger.setLevel(logging.INFO)
         log_file = f'{client_folder}/{client_id}.log'
@@ -93,7 +93,7 @@ class FedClient(FedNode):
     def on_client_accepted(self, message):
         msg = json.loads(message.payload.decode("utf-8"))
         if msg['client_id'] == self.client_id:
-            if msg['accept']:
+            if msg['accepted']:
                 super().publish_to(FedTopics.CLIENT_READY,
                                json.dumps(self.dataset_info.to_json()))
                 self.logger.info(f'client {self.client_id} was accepted by server to join')

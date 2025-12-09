@@ -1,7 +1,6 @@
 import json
 import os
-import tempfile
-import textwrap
+import shlex
 from pathlib import Path
 
 from containernet.node import Docker
@@ -11,12 +10,14 @@ from docker.errors import ImageNotFound
 from mininetfed.sim.util.docker_utils import docker_image_exists, build_fed_broker_docker_image, \
     build_fed_node_docker_image, MININETFED_IMAGE_INSTALL_LOCATION
 
+DOCKER_NODE_FOLDER = "/flw"
 
 class DockerFedNode(Docker):
     """Node that represents a docker container of a MininerFed server."""
     def __init__(self, name : str, node_folder : str, dimage : str, **kwargs):
 
-        volumes = [f"{node_folder}:/flw:rw"]
+        abs_folder_path = os.path.abspath(node_folder)
+        volumes = [f"{abs_folder_path}:{DOCKER_NODE_FOLDER}:rw"]
 
         if not dimage:
             raise ImageNotFound(f"No Image Docker was provided.")
@@ -26,29 +27,63 @@ class DockerFedNode(Docker):
 
         Docker.__init__(self, name=name, dimage=dimage, volumes=volumes, **kwargs)
 
-    def run(self, broker_addr):
+    def run(self, broker_addr) -> Path:
         pass
 
 class FedClientNode(DockerFedNode):
     """Node that represents a docker container of a MininerFed server."""
     def __init__(self, name : str, script: str, client_folder : str, dimage : str | None = None, client_args : dict | None = None, **kwargs):
-        super().__init__(name= name, node_folder = client_folder, dimage = dimage, **kwargs)
-        self.script = script
         self.client_id = name
+        self.client_folder = os.path.abspath(client_folder)
+        if len(script):
+            self.script = DOCKER_NODE_FOLDER + "/" + script
+        else:
+            raise FileNotFoundError(f"No execution script was provided for client {self.client_id}")
         self.client_args = client_args or {}
+
+        super().__init__(name=name, node_folder=self.client_folder, dimage=dimage, **kwargs)
         self.cmd("ifconfig eth0 down")
 
     def run(self, broker_addr):
-        cmd = f"""bash -c "umask 000; fed_node_executor --file {self.script} --node_id {self.client_id} --broker_addr {broker_addr} --node_args-json {json.dumps(self.client_args)}  2> err.txt """
         self.cmd("route add default gw %s" % broker_addr)
+
+        # JSON dos args, protegido para shell
+        args_json = shlex.quote(json.dumps(self.client_args))
+
+        done_file = f"{DOCKER_NODE_FOLDER}/.done"
+
+        # Comando “interno” (sem bash -c ainda)
+        inner_cmd = (
+            "umask 000; "
+            f"mininetfed-node-executor "
+            f"--file {shlex.quote(self.script)} "
+            f"--node_id {shlex.quote(self.client_id)} "
+            f"--broker_addr {shlex.quote(broker_addr)} "
+            f"--node_folder {DOCKER_NODE_FOLDER} "
+            f"--node_args-json {args_json} "
+            f"2> {DOCKER_NODE_FOLDER}/err.txt; "
+            f"echo DONE > {shlex.quote(done_file)}; "
+            "exec bash"
+        )
+
+        # Agora embrulha tudo em um bash -lc '<inner_cmd>'
+        cmd = f"bash -lc {shlex.quote(inner_cmd)}"
+
+        print(f"[FedServerNode] Abrindo terminal com: {cmd}")
         makeTerm(self, cmd=cmd)
+
+        return Path(f"{self.client_folder}/.done")
 
 class FedServerNode(DockerFedNode):
     """Node that represents a docker container of a MininerFed server."""
     def __init__(self, name : str, script: str | None = None, server_folder : str | None = None, dimage : str | None = None, server_args : dict | None = None, **kwargs):
         self.server_id = name
         # quando script não for passado como parametro, tem que executar o no server implementacao padrao
-        self.script = script or MININETFED_IMAGE_INSTALL_LOCATION + "/core/nodes/default_fed_server.py"
+        if script and len(script):
+            self.script = DOCKER_NODE_FOLDER + "/" + script
+        else:
+            self.script = MININETFED_IMAGE_INSTALL_LOCATION + "/core/nodes/default_fed_server.py"
+
         self.server_folder = server_folder or Path.cwd() / "server_output"
         if not server_folder or len(server_folder):
             self.server_folder.mkdir(exist_ok=True)
@@ -56,22 +91,40 @@ class FedServerNode(DockerFedNode):
 
         server_docker_image = dimage
         if not server_docker_image:
-            with tempfile.NamedTemporaryFile("w", delete=False) as f:
-                default_server_requirements = textwrap.dedent("""
-                    numpy
-                    paho-mqtt
-                """).strip()
-                f.write(default_server_requirements)
-                server_docker_image = build_fed_node_docker_image("server", f.name)["tag"]
+            server_docker_image = build_fed_node_docker_image("server")["tag"]
 
-        super().__init__(name= name, node_folder = server_folder, dimage = server_docker_image, **kwargs)
+        super().__init__(name= name, node_folder = self.server_folder, dimage = server_docker_image, **kwargs)
         self.cmd("ifconfig eth0 down")
 
     def run(self, broker_addr):
-        cmd = f"""bash -c "umask 000; fed_node_executor --file {self.script} --node_id {self.server_id} --broker_addr {broker_addr} --node_args-json {json.dumps(self.args)}  2> err.txt """
         self.cmd("route add default gw %s" % broker_addr)
-        os.umask(0o000)
+
+        # JSON dos args, protegido para shell
+        args_json = shlex.quote(json.dumps(self.server_args))
+
+        done_file = f"{DOCKER_NODE_FOLDER}/.done"
+
+        # Comando “interno” (sem bash -c ainda)
+        inner_cmd = (
+            "umask 000; "
+            f"mininetfed-node-executor "
+            f"--file {shlex.quote(self.script)} "
+            f"--node_id {shlex.quote(self.server_id)} "
+            f"--broker_addr {shlex.quote(broker_addr)} "
+            f"--node_folder {DOCKER_NODE_FOLDER} "
+            f"--node_args-json {args_json} "
+            f"2> {DOCKER_NODE_FOLDER}/err.txt; "
+            f"echo DONE > {shlex.quote(done_file)}; "
+            "exec bash"
+        )
+
+        # Agora embrulha tudo em um bash -lc '<inner_cmd>'
+        cmd = f"bash -lc {shlex.quote(inner_cmd)}"
+
+        print(f"[FedServerNode] Abrindo terminal com: {cmd}")
         makeTerm(self, cmd=cmd)
+
+        return Path(f"{self.server_folder}/.done")
 
 class FedBrokerNode(DockerFedNode):
     """Node that represents a docker container of a MininerFed broker."""
@@ -87,9 +140,31 @@ class FedBrokerNode(DockerFedNode):
         if not broker_docker_image:
             broker_docker_image = build_fed_broker_docker_image()["tag"]
 
-        super().__init__(name= name, node_folder = broker_folder, dimage = broker_docker_image, **kwargs)
+        super().__init__(name= name, node_folder = self.broker_folder, dimage = broker_docker_image, **kwargs)
         self.cmd("iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE")
 
     def run(self, broker_addr = ""):
-        cmd = f"""bash -c "umask 000; fed_node_executor --file {self.script} --node_id {self.broker_id} --broker_addr {broker_addr} --node_args-json {json.dumps(self.broker_args)}  2> err.txt """
+        broker_addr = self.IP(intf=f"{self.broker_id}-eth0")
+
+        # JSON dos args, protegido para shell
+        args_json = shlex.quote(json.dumps(self.broker_args))
+
+        # Comando “interno” (sem bash -c ainda)
+        inner_cmd = (
+            "umask 000; "
+            f"mininetfed-node-executor "
+            f"--file {shlex.quote(self.script)} "
+            f"--node_id {shlex.quote(self.broker_id)} "
+            f"--broker_addr {shlex.quote(broker_addr)} "
+            f"--node_folder {DOCKER_NODE_FOLDER} "
+            f"--node_args-json {args_json} "
+            f"2> /flw/err.txt"
+        )
+
+        # Agora embrulha tudo em um bash -lc '<inner_cmd>'
+        cmd = f"bash -lc {shlex.quote(inner_cmd)}"
+
+        print(f"[FedBrokerNode] Abrindo terminal com: {cmd}")
         makeTerm(self, cmd=cmd)
+
+        return Path("")

@@ -81,7 +81,7 @@ class FedServer(FedNode):
             self.client_selector = server_args[ServerOptions.CLIENT_SELECTOR]
 
         # general logger
-        log_format = "%(asctime)s - %(infotype)-6s - %(levelname)s - %(message)s"
+        log_format = "%(asctime)s - %(levelname)s - %(message)s"
         log_file = f'{server_folder}/server.log'
         h_general = logging.FileHandler(filename=log_file, mode="w")
         h_general.setFormatter(logging.Formatter(log_format))

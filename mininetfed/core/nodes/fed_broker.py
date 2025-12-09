@@ -1,5 +1,5 @@
+import os
 import subprocess
-import tempfile
 
 from mininetfed.core.nodes.fed_node import FedNode
 
@@ -10,20 +10,7 @@ class FedBroker(FedNode):
         self.broker_id = ""
         self.broker_address = ""
         self.broker_folder = ""
-        self.configs = ""
-
-        """ Por padrao, o mosquitto ja vem com essas configs
-        self.configs = {
-            "
-            persistence false
-            log_dest stdout
-            allow_anonymous True
-            connection_messages True
-            listener 1883
-            sys_interval 5
-            "
-        }
-        """
+        self.config_file = ""
 
     def args_to_config(self, broker_args: dict) -> str:
         lines = []
@@ -37,20 +24,37 @@ class FedBroker(FedNode):
         self.broker_address = broker_addr
         self.broker_folder = broker_folder
         self.broker_id = broker_id
-        if broker_args and len(broker_args):
-            self.configs = self.args_to_config(broker_args)
 
+        default_configs = f"""\
+persistence false
+log_dest stdout
+log_dest file {self.broker_folder}/mosquitto.log
+allow_anonymous true
+connection_messages true
+listener 1883 0.0.0.0
+sys_interval 5
+"""
+        configs = ""
+        if broker_args and len(broker_args):
+            configs = self.args_to_config(broker_args)
+        else:
+            configs = default_configs
+
+        self.config_file = os.path.join(self.broker_folder, "mosquitto.conf")
+        with open(self.config_file, "w", encoding="utf-8") as config_f:
+            config_f.write(configs)
+
+        with open(f"{self.broker_folder}/mosquitto.log", "w", encoding="utf-8") as config_f:
+            config_f.write("")
 
     def run(self):
-        conf_path = ""
-        if len(self.configs):
-            with tempfile.NamedTemporaryFile("w", delete=False) as f:
-                f.write(self.configs)
-                conf_path = f.name
 
-        p = subprocess.Popen(
-            ["mosquitto", "-c", conf_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        cmd = ["mosquitto", "-c", self.config_file]
+        print(f"[FedBroker] Iniciando mosquitto com comando: {' '.join(cmd)}")
+        print(f"[FedBroker] Usando config: {self.config_file}")
+
+        try:
+            subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"[FedBroker] mosquitto saiu com erro: {e.returncode}")
+
