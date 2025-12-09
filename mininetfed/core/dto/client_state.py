@@ -28,7 +28,7 @@ class ClientState:
         return self.client_info
 
     def set_selection_for_round(self, round_id : int,  selected : bool):
-        for i in range(len(self.selected), round_id):
+        for i in range(len(self.selected), round_id+1):
             self.selected.append(False)
         self.selected[round_id] = selected
 
@@ -42,7 +42,7 @@ class ClientState:
         return self.selected
 
     def set_training_status_for_round(self, round_id, training_status : bool):
-        for i in range(len(self.training_status), round_id):
+        for i in range(len(self.training_status), round_id+1):
             self.training_status.append(False)
         self.training_status[round_id] = training_status
 

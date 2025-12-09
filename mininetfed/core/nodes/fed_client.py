@@ -92,10 +92,11 @@ class FedClient(FedNode):
 
     def on_client_accepted(self, message):
         msg = json.loads(message.payload.decode("utf-8"))
+        print(f"on_client_accepted msg= {msg}")
         if msg['client_id'] == self.client_id:
             if msg['accepted']:
                 super().publish_to(FedTopics.CLIENT_READY,
-                               json.dumps(self.dataset_info.to_json()))
+                               self.dataset_info.to_json())
                 self.logger.info(f'client {self.client_id} was accepted by server to join')
             else:
                 self.logger.info(f'client {self.client_id} was denied by server to join')

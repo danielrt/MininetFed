@@ -27,7 +27,7 @@ class FedServer(FedNode):
         self.fed_clients: dict[str, ClientState] = {}
         self.training_responses: list[TrainingData] = []
         self.metrics_responses: list[Metrics] = []
-        self.current_round = 1
+        self.current_round = 0
         self.agg_metric_by_round = []
         self.best_agg_metric = 0.0
         self.metric_stop_value = 0.0
@@ -188,6 +188,12 @@ class FedServer(FedNode):
                         return True
         return False
 
+    def get_num_ready_clients(self) -> int:
+        return sum(
+            1 for c in self.fed_clients.values()
+            if c.get_dataset_info() is not None
+        )
+
     def run(self):
         super().start_communication_loop()
         self.logger.info(f'starting server {super().get_node_id()}...')
@@ -202,18 +208,30 @@ class FedServer(FedNode):
         self.spnfl_logger.info("T_ARRIVAL_START")
 
         # wait trainers to connect
-        while len(self.fed_clients) < self.min_trainers:
+        # opcional: timeout
+        max_wait = 60  # segundos
+        t0 = time.time()
+
+        # wait trainers to be READY
+        while self.get_num_ready_clients() < self.min_trainers:
+            if time.time() - t0 > max_wait:
+                self.logger.warning(
+                    f"Timeout waiting READY: only {self.get_num_ready_clients()} "
+                    f"clients ready (min_trainers={self.min_trainers})"
+                )
+                super().publish_to(FedTopics.STOP, None)
+                super().stop_communication_loop()
+                return
             time.sleep(1)
 
         self.spnfl_logger.info(f'T_ARRIVAL_END {self.min_trainers} {len(self.fed_clients)}')
+        print(self.fed_clients)
 
         # begin training
-        selected_qtd = 0
         round_times = []  # lista para armazenar o tempo de cada round
         stop_fed = False
-        while self.current_round <= self.num_rounds and not stop_fed:
+        while self.current_round < self.num_rounds and not stop_fed:
             round_start_time = time.time()  # início do round
-            self.current_round += 1
             self.training_responses = []
             self.metrics_responses = []
             self.logger.info(
@@ -221,7 +239,7 @@ class FedServer(FedNode):
             print(Color.RESET + '\n' + Color.BOLD_START +
                   f'starting round {self.current_round}' + Color.BOLD_END)
 
-            self.spnfl_logger.info(f'START_ROUND {self.current_round - 1}')
+            self.spnfl_logger.info(f'START_ROUND {self.current_round}')
 
             self.spnfl_logger.info(f'T_SELECT_START')
 
@@ -256,7 +274,7 @@ class FedServer(FedNode):
             self.spnfl_logger.info(f'T_RETURN_0_START')
 
             # wait for agg responses
-            while len(self.training_responses) < selected_qtd:
+            while len(self.training_responses) < len(selected_fed_clients):
                 time.sleep(1)
             self.spnfl_logger.info(f'T_RETURN_0_END {len(self.training_responses)}')
 
@@ -321,6 +339,8 @@ class FedServer(FedNode):
 
             self.spnfl_logger.info(f'ROUND_DURATION {round_duration}')
             self.spnfl_logger.info(f'END_ROUND {self.current_round}')
+
+            self.current_round += 1
 
         self.logger.info('stop condition was met')
         self.logger.info(f'{self.current_round} rounds were executed')

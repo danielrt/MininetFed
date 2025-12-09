@@ -4,7 +4,7 @@ from mininetfed.core.utils import base64_to_ndarray, ndarray_to_base64
 
 class TrainingData:
     def __init__(self, node_id : str, success : bool, round_id : int, weights : list[ndarray]):
-        self.node_id = node_id
+        self.client_id = node_id
         self.success = success
         self.round_id = round_id
         self.weights = weights
@@ -28,13 +28,13 @@ class TrainingData:
 
     def to_dict(self) -> dict:
         weights_base64 = [ndarray_to_base64(w) for w in self.weights]
-        return {"client_id": self.node_id, "success": self.success, "round_id": self.round_id, "weights": weights_base64}
+        return {"client_id": self.client_id, "success": self.success, "round_id": self.round_id, "weights": weights_base64}
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict())
 
     def get_node_id(self) -> str:
-        return self.node_id
+        return self.client_id
     def was_success(self) -> bool:
         return self.success
 

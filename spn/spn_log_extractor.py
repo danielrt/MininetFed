@@ -75,7 +75,7 @@ class Experiment:
         data_coluns = ['ROUND', 'CLIENT_ID', 'ROUND_DURATION', 'T_SELECT', 'SELECTED', 'T_SEND', 'T_TRAIN', 'TRAINED', 'T_RETURN' ]
         data_csv.append(data_coluns)
         for client in self.clients:
-            client_id = client.node_id
+            client_id = client.client_id
             self.clients_t_arrival[client_id] = abs((client.t_arrival - self.server.clients[client_id].t_arrival).total_seconds()) * 1000
             self.clients_metrics[client_id] = {'ROUND_DURATION' : 0.0, 'T_SELECT' : 0.0, 'T_SEND' : 0.0, 'T_TRAIN' : 0.0, 'T_RETURN' : 0.0}
             n_rounds = len(client.rounds)
