@@ -24,7 +24,7 @@ class MininetFed(Containernet):
             self.nodes.append(n)
         return n
 
-    def runFedNodes(self):
+    def runFed(self):
         if not self.broker:
             raise RuntimeError("You must add a FedBrokerNode to the net.")
 
@@ -39,3 +39,7 @@ class MininetFed(Containernet):
         for done in done_files:
             while not done.exists():
                 sleep(1)
+
+        # exclui os arquivos
+        for done in done_files:
+            done.unlink(missing_ok=True)

@@ -1,3 +1,4 @@
+import threading
 from abc import abstractmethod
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -24,6 +25,8 @@ class FedNode:
         self.node_args: Optional[Dict[str, Any]] = None
         self.subscribed_fed_messages: Optional[List[FedTopics]] = None
 
+        self._connected_event = threading.Event()
+
     def configure(self, node_id, broker_addr, node_folder, node_args: Dict[str, Any]):
         self.node_id = node_id
         self.node_args = node_args
@@ -35,9 +38,6 @@ class FedNode:
             protocol=mqtt.MQTTv5,  # se quiser manter v3.1.1, pode tirar esse argumento
         )
         # ===============================================================
-
-        # Usa 'port', não 'bind_port'
-        self.mqtt_client.connect(host=broker_addr, port=1883)
 
         # Callbacks
         self.mqtt_client.on_connect = self.on_connect
@@ -70,6 +70,9 @@ class FedNode:
             FedTopics.STOP.value, self.on_stop_super
         )
 
+        # Usa 'port', não 'bind_port'
+        self.mqtt_client.connect(host=broker_addr, port=1883)
+
     def start_communication_loop(self):
         if self.mqtt_client is not None:
             self.mqtt_client.loop_start()
@@ -77,6 +80,13 @@ class FedNode:
     def stop_communication_loop(self):
         if self.mqtt_client is not None:
             self.mqtt_client.loop_stop()
+
+    def wait_until_connected(self, timeout: float | None = None) -> bool:
+        """
+        Bloqueia até o on_connect ser chamado e os tópicos serem assinados,
+        ou até 'timeout' (em segundos). Retorna True se conectou a tempo.
+        """
+        return self._connected_event.wait(timeout=timeout)
 
     def get_node_id(self):
         return self.node_id
@@ -89,7 +99,9 @@ class FedNode:
 
     def publish_to(self, fed_topic: FedTopics, payload: Optional[str]):
         if self.mqtt_client is not None:
-            self.mqtt_client.publish(fed_topic.value, payload)
+            info = self.mqtt_client.publish(fed_topic.value, payload, qos=1)
+            # log opcional
+            #print(f"[{self.node_id}] publish {fed_topic.value} rc={info.rc}, mid={info.mid}")
 
     # ====== Callbacks ======
 
@@ -106,6 +118,9 @@ class FedNode:
             else:
                 topic_str = str(topic)
             self.mqtt_client.subscribe(topic_str)
+
+        # SINALIZA que já conectou e assinou
+        self._connected_event.set()
 
     # (Opcional) também no padrão novo
     def on_disconnect(self, client, userdata, rc, properties=None):

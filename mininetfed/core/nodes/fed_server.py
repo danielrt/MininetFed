@@ -36,8 +36,8 @@ class FedServer(FedNode):
         self.client_selector = ClientSelectorType.ALL_CLIENTS
         self.client_acceptor = ClientAcceptorType.ALL_CLIENTS
         self.no_improvement_counter = 0
-        self.last_model = None
-        self.best_model = None
+        self.last_model : TrainingData | None = None
+        self.best_model : TrainingData | None = None
         self.server_args = None
         self.num_rounds = 0
         self.min_trainers = 0
@@ -59,6 +59,7 @@ class FedServer(FedNode):
         super().configure(server_id, broker_addr, server_folder, server_args)
 
         self.best_model_file = f'{server_folder}/best.model'
+        self.last_model_file = f'{server_folder}/last.model'
         self.server_args = server_args
 
         required = {ServerOptions.MIN_CLIENTS, ServerOptions.NUM_ROUNDS, ServerOptions.STOP_VALUE}
@@ -127,6 +128,7 @@ class FedServer(FedNode):
         was_success = training_response.was_success()
         client_round_id = training_response.get_round_id()
         response_status = was_success and client_round_id == self.current_round
+        print(f"[SERVER] CLIENT_WEIGHTS from {client_id}")
         self.fed_clients[client_id].set_training_status_for_round(self.current_round, response_status)
         self.spnfl_logger.info(f'T_RETURN_0 {client_id} {was_success}')
         if response_status:
@@ -176,6 +178,7 @@ class FedServer(FedNode):
               f'{self.metric_name} on round {self.current_round} was {agg_metric}\n' + Color.RESET)
         self.agg_metric_by_round.append(agg_metric)
         if agg_metric >= self.metric_stop_value:
+            print(Color.YELLOW + f'Stop condition by stop value was met' + Color.YELLOW)
             return True
         else:
             if agg_metric >= self.best_agg_metric:
@@ -183,8 +186,11 @@ class FedServer(FedNode):
                 self.best_model = self.last_model
             else:
                 self.no_improvement_counter += 1
+                print(Color.YELLOW + f'No improvements for {self.metric_name} occurred in the last {self.no_improvement_counter}' + Color.YELLOW)
+
                 if "early_stop" in self.server_args:
                     if self.no_improvement_counter >= self.server_args["early_stop"]:
+                        print(Color.YELLOW + f'Stop condition by early stop was met' + Color.YELLOW)
                         return True
         return False
 
@@ -196,14 +202,16 @@ class FedServer(FedNode):
 
     def run(self):
         super().start_communication_loop()
+
+        # espera conexão
+        if not self.wait_until_connected(timeout=5.0):
+            print(f"[SERVER {self.get_node_id()}] Failed to connect/subscribe to broker")
+            return
+
         self.logger.info(f'starting server {super().get_node_id()}...')
         print(Color.BOLD_START + f'starting node {super().get_node_id()}...' + Color.BOLD_END)
-        #super().publish_to('minifed/autoWaitContinue', json.dumps({'continue': True}))
 
         self.spnfl_logger.info("INIT_EXPERIMENT")
-
-        # best dto so far
-        best_model = None
 
         self.spnfl_logger.info("T_ARRIVAL_START")
 
@@ -225,7 +233,6 @@ class FedServer(FedNode):
             time.sleep(1)
 
         self.spnfl_logger.info(f'T_ARRIVAL_END {self.min_trainers} {len(self.fed_clients)}')
-        print(self.fed_clients)
 
         # begin training
         round_times = []  # lista para armazenar o tempo de cada round
@@ -281,17 +288,13 @@ class FedServer(FedNode):
             self.spnfl_logger.info(f'T_AGGREG_START')
 
             # aggregate and send
-            self.last_model = self.aggregate_model(self.training_responses, self.fed_clients)
+            agg_weights = self.aggregate_model(self.training_responses, self.fed_clients)
 
-            agg_model_data = TrainingData(super().get_node_id(), True, self.current_round, self.last_model)
-
-            # save partial dto here
-
-            response = json.dumps(agg_model_data.to_json())
+            self.last_model = TrainingData(super().get_node_id(), True, self.current_round, agg_weights)
 
             self.spnfl_logger.info(f'T_AGGREG_END')
 
-            super().publish_to(FedTopics.SERVER_WEIGHTS, response)  #### T_SEND
+            super().publish_to(FedTopics.SERVER_WEIGHTS, self.last_model.to_json())  #### T_SEND
 
             self.spnfl_logger.info(f'T_SEND')
 
@@ -314,15 +317,19 @@ class FedServer(FedNode):
 
             stop_fed = self.stop_condition(agg_metric)
 
+
             self.spnfl_logger.info(f'T_SAVE_START')
             with open(self.last_model_file, "w", encoding="utf-8") as f:
-                json.dump(self.last_model, f, ensure_ascii=False, indent=2)
+                f.write(self.last_model.to_json())
             self.spnfl_logger.info(f'T_SAVE_END')
 
             if stop_fed:
                 self.spnfl_logger.info(f'T_SAVE_START')
+                # para o caso em que o modelo converge ja no round 0
+                if not self.best_model:
+                    self.best_model = self.last_model
                 with open(self.best_model_file, "w", encoding="utf-8") as f:
-                    json.dump(self.best_model, f, ensure_ascii=False, indent=2)
+                    f.write(self.best_model.to_json())
                 self.spnfl_logger.info(f'T_SAVE_END')
 
             # calcular tempo do round e estimar tempo restante

@@ -91,15 +91,17 @@ class FedClient(FedNode):
         self.set_client_info(self.client_info)
 
     def on_client_accepted(self, message):
-        msg = json.loads(message.payload.decode("utf-8"))
-        print(f"on_client_accepted msg= {msg}")
+        m = message.payload.decode("utf-8")
+        msg = json.loads(m)
         if msg['client_id'] == self.client_id:
             if msg['accepted']:
                 super().publish_to(FedTopics.CLIENT_READY,
                                self.dataset_info.to_json())
                 self.logger.info(f'client {self.client_id} was accepted by server to join')
+                print(f'client {self.client_id} was accepted by server to join')
             else:
                 self.logger.info(f'client {self.client_id} was denied by server to join')
+                print(f'client {self.client_id} was denied by server to join')
                 self.stop = True
     """
     callback for selectionQueue: the selection queue is sent by the server; 
@@ -116,8 +118,10 @@ class FedClient(FedNode):
             if selected:
                 self.spnfl_logger.info(f'T_SELECT True')
                 print(Color.BOLD_START + '[{}] new round starting'.format(self.current_round) + Color.BOLD_END)
+                self.logger.info(f"[{self.current_round}] new round starting")
                 print(
                     f'client was selected for training this round and will start training!')
+                self.logger.info(f'client was selected for training this round and will start training!')
 
                 t0 = time.time()
                 was_success = self.fit()
@@ -132,19 +136,24 @@ class FedClient(FedNode):
                 super().publish_to(FedTopics.CLIENT_WEIGHTS, client_training_data.to_json())
                 self.spnfl_logger.info(f'T_RETURN_0')
                 print(f'finished training and sent weights!')
+                self.logger.info(f'finished training and sent weights!')
             else:
                 self.spnfl_logger.info(f'T_SELECT False')
                 print(Color.BOLD_START + '[{}] new round starting'.format(self.current_round) + Color.BOLD_END)
+                self.logger.info(f"[{self.current_round}] new round starting")
                 print(f'trainer WAS NOT selected for training this round')
+                self.logger.info(f'trainer WAS NOT selected for training this round')
 
     # callback for posAggQueue: gets aggregated weights and publish validation results on the metricsQueue
     def on_server_weights(self, message):
         self.spnfl_logger.info(f'T_SEND')
         print(f'received aggregated weights!')
+        self.logger.info(f'received aggregated weights!')
         agg_training_data = TrainingData.from_json(message.payload.decode("utf-8"))
 
         metrics = self.evaluate()
         print(f'sending eval metrics!\n')
+        self.logger.info(f'sending eval metrics!')
         super().publish_to(FedTopics.CLIENT_METRICS, metrics.to_json())
 
         self.update_weights(agg_training_data.get_weights())
@@ -155,11 +164,19 @@ class FedClient(FedNode):
     # callback for stopQueue: if conditions are met, stop training and exit process
     def on_stop(self):
         print(Color.RED + f'received message to stop!')
+        self.logger.info(f'received message to stop!')
         self.stop = True
 
     def run(self):
         # start waiting for jobs
         super().start_communication_loop()
+
+        # Espera até estar conectado + tópicos assinados
+        # (5 segundos de timeout, por exemplo)
+        if not super().wait_until_connected(timeout=5.0):
+            print(f"[CLIENT {self.client_id}] Failed to connect/subscribe to broker")
+            self.logger.info(f"[CLIENT {self.client_id}] Failed to connect/subscribe to broker")
+            return
 
         self.spnfl_logger.info("INIT_EXPERIMENT")
 
@@ -167,6 +184,7 @@ class FedClient(FedNode):
         self.spnfl_logger.info(f'T_ARRIVAL')
         print(Color.BOLD_START +
               f'trainer {self.client_id} connected!\n' + Color.BOLD_END)
+        self.logger.info(f'trainer {self.client_id} connected!\n')
 
         while not self.stop:
             time.sleep(1)
