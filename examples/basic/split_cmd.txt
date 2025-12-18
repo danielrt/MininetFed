@@ -1,0 +1,5 @@
+idd
+python3 mnist_gen_clients.py -N 4 --mode iid --py_src_dir ./client_code
+
+non-idd
+python mnist_gen_clients.py -N 4 --mode non_iid --alpha 0.3 --py_src_dir ./client_code

@@ -7,7 +7,8 @@ Its main features include:
 - **Addition of new Mininet nodes**: Server, Client. These containerized nodes allow configuration of connection characteristics, available RAM, CPU, etc.
 - **Automatic setup of a communication environment using MQTT**
 - **Facilitates the implementation of new aggregation and client selection functions**
-- **Enables the development of new trainers** to be executed on the clients (model + dataset + manipulations)
+- **Enables the development of new trainers** to be executed on the clients (model + dataset + manipulations).
+- **Easy to develop**: User just need to define the trainer (client) code and topology of the net.
 
 
 # Mailing List  
@@ -19,7 +20,8 @@ Its main features include:
 ### Cloning the MininetFed Repository:
 
 ```
-git clone https://github.com/lprm-ufes/MininetFed
+git clone -b refactor --single-branch https://github.com/danielrt/mininetfed.git
+
 ```
 
 ## Prerequisites
@@ -46,67 +48,58 @@ sudo util/install.sh -W
 
 ```bash
 cd ../MininetFed
-sudo make install
+sudo python setup.py install
 ```
-
-### Generating Docker Images
-
-MininetFed also depends on some preconfigured Docker images. Use the following commands to build these images:
-
-```bash
-sudo ./docker/create_images.sh
-```
-
-<!--
-## Installing MininetFed
-
- To install, simply run the installation script:
-
-```bash
-sudo ./scripts/install.sh
-```
--->
 
 ## Running the First Example
 
 A basic example can be executed to test MininetFed's functionality:
 
 ```bash
-sudo python3 examples/basic.py
+pip install sckit-learn pandas
+
+cd examples/basic/
+
+python3 mnist_gen_clients.py -N 4 --mode iid --py_src_dir ./client_code
+
+sudo python basic.py
 ```
+The basic example simulates a federated training using the MNIST dataset, with four clients (each one with it's 
+own data and code), and a server. It consists of the following:
 
-### Expected Result
+- **basic.py**: this script defines the MininetFed topology. It defines the FL parameters, creates a switch, a broker, 
+a server and four clients. Then, it runs the training until a stop condition is achieved.
+- **client_code/mnist_trainer.py**: the trainer (client) code that each MininetFed host will run.
+- **client_requirements.txt**: the package requirements for the trainer. In this example, we use TensorFlow to define 
+and train the model and Scikit-learn to load and prepare the data.
+- **mnist_gen_clients.py**: a helper script created just for this example (**NOT PART OF MININETFED**). 
+It downloads the MNIST dataset, divides it into four new datasets with the same original's distribution. Then 
+it creates a path for each client containing the client code and the corresponding data.
 
-After execution starts, two folders are expected to be created: `client_log` and `experiments/basic`.
+After running the command *mnist_gen_clients.py* four folders are created:
 
-`client_log` is populated with client error logs, while `experiments/basic` contains server error logs, a copy of the `topology` file that generated the experiment, and an experiment log file.
+- **clients/client0**: code and dataset for client0.
+- **clients/client1**: code and dataset for client1.
+- **clients/client2**: code and dataset for client2.
+- **clients/client3**: code and dataset for client3.
 
-<img src="https://github.com/lprm-ufes/MininetFed/blob/main/imgs/client_log.png" alt="screenshot of client logs folder" />
-<img src="https://github.com/lprm-ufes/MininetFed/blob/main/imgs/results.png" alt="screenshot of experiment folder" />
+These folders represents the space each client is allowed to read or save data. In this example, we use the 
+*mnist_gen_clients.py* script to automate the creation of these folders.
 
-A few seconds after execution starts, several windows are expected to open. These windows include:
+After running *basic.py*, the mininetfed topology is created and the federated training starts. You should see 
+a xterm terminal for the server, broker and each client: 
 
-- Broker (brk)
-- Server (srv1)
-- Clients from 0 to 7 (sta0, sta1 ... stax)
+<img src="https://github.com/danielrt/MininetFed/blob/refactor/imgs/basic_example_exe.png" alt="screenshot of basic example training execution" />
 
-<img src="https://github.com/lprm-ufes/MininetFed/blob/main/imgs/execution.png" alt="screenshot of opened windows" />
+The server and broker create their own folder if not specified. Each node will generate logs in it's own folders:
 
-After execution ends, all windows will close automatically. The results can be checked in the log file idevelopment.
+<img src="https://github.com/danielrt/MininetFed/blob/refactor/imgs/basic_example_folders.png" alt="screenshot of experiment folder" />
+
+After execution ends, all windows will close automatically. The results can be checked in the server folder.
 
 # Documentation
 
 https://github.com/lprm-ufes/MininetFed/tree/development/docs
-
-# Troubleshooting
-
-If any problems occur during execution, use the following command to delete the containers and clean up Mininet:
-
-```bash
-mnf_clean
-```
-
-After cleaning, try running it again.
 
 # How to Cite
 
@@ -134,5 +127,6 @@ See the complete list of citations [here](docs/en/citations.md).
 [João Pedro Batista](https://github.com/joaoBatista04)  
 [Ramon Fontes](https://github.com/ramonfontes)  
 [Rodolfo Villaça](https://github.com/rodolfovillaca)  
-[Vinícius Mota](https://github.com/vfsmota)  
+[Vinícius Mota](https://github.com/vfsmota)
+[Daniel Ribeiro Trindade](https://github.com/danielrt)
 
