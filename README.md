@@ -65,7 +65,7 @@ python3 mnist_gen_clients.py -N 4 --mode iid --py_src_dir ./client_code
 sudo python basic.py
 ```
 The basic example simulates a federated training using the MNIST dataset, with four clients (each one with it's 
-own data and code), and a server. It consists of the following:
+own data and code) and a server. It consists of the following:
 
 - **basic.py**: this script defines the MininetFed topology. It defines the FL parameters, creates a switch, a broker, 
 a server and four clients. Then, it runs the training until a stop condition is achieved.

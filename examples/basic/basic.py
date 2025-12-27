@@ -1,3 +1,4 @@
+from mininetfed.core.dto.metrics import MetricType
 from mininetfed.core.fed_options import ServerOptions, ClientAcceptorType, ClientSelectorType, AggregatorType
 from mininetfed.sim.net import MininetFed
 from mininetfed.sim.nodes import FedServerNode, FedClientNode, FedBrokerNode
@@ -6,6 +7,7 @@ from mininetfed.sim.util.docker_utils import build_fed_node_docker_image
 server_args = {
     ServerOptions.MIN_CLIENTS      : 4,
     ServerOptions.NUM_ROUNDS       : 100,
+    ServerOptions.TARGET_METRIC    : MetricType.ACCURACY,
     ServerOptions.STOP_VALUE       : 0.98,
     ServerOptions.EARLY_STOP_VALUE : 10,
     ServerOptions.CLIENT_ACCEPTOR  : ClientAcceptorType.ALL_CLIENTS,

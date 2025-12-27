@@ -1,10 +1,11 @@
 import os
 import numpy as np
 from keras.src.utils import to_categorical
+from sklearn.metrics import confusion_matrix
+
 from mininetfed.core.dto.client_info import ClientInfo
 from mininetfed.core.dto.dataset_info import DatasetInfo
-from mininetfed.core.dto.metrics import Metrics
-from mininetfed.core.fed_options import MetricType
+from mininetfed.core.dto.metrics import Metrics, MetricType
 from mininetfed.core.nodes.fed_client import FedClient
 from numpy import ndarray
 from sklearn.model_selection import train_test_split
@@ -79,8 +80,22 @@ class TrainerMINIST(FedClient):
             return False
 
     def evaluate(self) -> Metrics:
+        # accuracy do Keras
         values = self.model.evaluate(x=self.X_test, y=self.y_test, verbose=False)
-        metrics = {MetricType.ACCURACY : values[1]}
+        acc = float(values[1])
+
+        # y_true: de one-hot -> classe
+        y_true = np.argmax(self.y_test, axis=1)
+
+        # y_pred: probabilidades -> classe
+        y_pred_probs = self.model.predict(self.X_test, verbose=0)
+        y_pred = np.argmax(y_pred_probs, axis=1)
+
+        cm = confusion_matrix(y_true, y_pred, labels=list(range(10)))
+
+        metrics = {
+            MetricType.CONFUSION_MATRIX: cm.tolist(),  # JSON serializável
+        }
         return Metrics(client_id=self.get_client_id(), metrics=metrics)
 
     def update_weights(self, global_weights: list[ndarray]):

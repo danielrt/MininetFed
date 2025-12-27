@@ -3,16 +3,16 @@ import time
 from numpy import ndarray
 import json
 
-from mininetfed.core.fed_options import MetricType, ServerOptions, AggregatorType, ClientSelectorType, \
+from mininetfed.core.fed_options import ServerOptions, AggregatorType, ClientSelectorType, \
     ClientAcceptorType
-from mininetfed.core.metric_aggregators.accuracy_aggregator import AccuracyAggregator
+from mininetfed.core.metric_aggregators.global_metrics_aggregator import GlobalMetricsAggregator
 from mininetfed.core.model_aggregators.fedavg import FedAvg
 from mininetfed.core.client_acceptors.all_clients_acceptor import AllClientsAcceptor
 from mininetfed.core.dto.client_info import ClientInfo
 from mininetfed.core.client_selectors.all_clients_selector import AllClientsSelector
 from mininetfed.core.dto.client_state import ClientState
 from mininetfed.core.nodes.fed_node import FedNode, FedTopics
-from mininetfed.core.dto.metrics import Metrics
+from mininetfed.core.dto.metrics import Metrics, MetricType
 from mininetfed.core.dto.training_data import TrainingData
 from mininetfed.core.dto.dataset_info import DatasetInfo
 from mininetfed.core.utils import Color
@@ -23,15 +23,17 @@ class FedServer(FedNode):
         super().__init__()
         self.best_model_file = ""
         self.last_model_file = ""
+        self.metrics_summary_file = ""
 
         self.fed_clients: dict[str, ClientState] = {}
         self.training_responses: list[TrainingData] = []
         self.metrics_responses: list[Metrics] = []
         self.current_round = 0
-        self.agg_metric_by_round = []
-        self.best_agg_metric = 0.0
-        self.metric_stop_value = 0.0
-        self.metric_name = MetricType.ACCURACY
+        self.agg_metrics_by_round : list[Metrics] = []
+        self.best_metrics : Metrics | None = None
+        self.best_target_metric = 0.0
+        self.target_metric_stop_value = 0.0
+        self.target_metric = MetricType.ACCURACY
         self.model_aggregator = AggregatorType.FED_AVG
         self.client_selector = ClientSelectorType.ALL_CLIENTS
         self.client_acceptor = ClientAcceptorType.ALL_CLIENTS
@@ -60,6 +62,7 @@ class FedServer(FedNode):
 
         self.best_model_file = f'{server_folder}/best.model'
         self.last_model_file = f'{server_folder}/last.model'
+        self.metrics_summary_file = f'{server_folder}/metrics_summary.txt'
         self.server_args = server_args
 
         required = {ServerOptions.MIN_CLIENTS, ServerOptions.NUM_ROUNDS, ServerOptions.STOP_VALUE}
@@ -69,11 +72,11 @@ class FedServer(FedNode):
         else:
             self.num_rounds = server_args[ServerOptions.NUM_ROUNDS]
             self.min_trainers = server_args[ServerOptions.MIN_CLIENTS]
-            self.metric_stop_value = server_args[ServerOptions.STOP_VALUE]
+            self.target_metric_stop_value = server_args[ServerOptions.STOP_VALUE]
 
         # optional server args
-        if ServerOptions.METRIC in server_args:
-            self.metric_name = server_args[ServerOptions.METRIC]
+        if ServerOptions.TARGET_METRIC in server_args:
+            self.target_metric = server_args[ServerOptions.TARGET_METRIC]
         if ServerOptions.MODEL_AGGREGATOR in server_args:
             self.model_aggregator = server_args[ServerOptions.MODEL_AGGREGATOR]
         if ServerOptions.CLIENT_ACCEPTOR in server_args:
@@ -166,27 +169,27 @@ class FedServer(FedNode):
             agg_model = FedAvg().aggregate(training_responses, clients_state)
         return agg_model
 
-    def aggregate_metrics(self, clients_metrics : list[Metrics]) -> float:
-        agg_metric = 0.0
-        if self.metric_name == MetricType.ACCURACY:
-            agg_metric = AccuracyAggregator().aggregate(clients_metrics)
-        return agg_metric
+    def aggregate_metrics(self, clients_metrics : list[Metrics], n_samples : list[int]) -> Metrics:
+        agg_metrics = GlobalMetricsAggregator().aggregate(clients_metrics, n_samples)
+        self.agg_metrics_by_round.append(agg_metrics)
+        return agg_metrics
 
-    def stop_condition(self, agg_metric : float) -> bool:
-        self.logger.info(f'{self.metric_name}: {agg_metric}\n')
+    def stop_condition(self, agg_metrics : Metrics) -> bool:
+        agg_target_metric = agg_metrics.get_metric(self.target_metric)
+        self.logger.info(f'{self.target_metric}: {agg_target_metric}\n')
         print(Color.GREEN +
-              f'{self.metric_name} on round {self.current_round} was {agg_metric}\n' + Color.RESET)
-        self.agg_metric_by_round.append(agg_metric)
-        if agg_metric >= self.metric_stop_value:
+              f'{self.target_metric} on round {self.current_round} was {agg_target_metric}\n' + Color.RESET)
+        if agg_target_metric >= self.target_metric_stop_value:
             print(Color.YELLOW + f'Stop condition by stop value was met' + Color.YELLOW)
             return True
         else:
-            if agg_metric >= self.best_agg_metric:
-                self.best_agg_metric = agg_metric
+            if agg_target_metric >= self.best_target_metric:
+                self.best_target_metric = agg_target_metric
+                self.best_metrics = agg_metrics
                 self.best_model = self.last_model
             else:
                 self.no_improvement_counter += 1
-                print(Color.YELLOW + f'No improvements for {self.metric_name} occurred in the last {self.no_improvement_counter}' + Color.YELLOW)
+                print(Color.YELLOW + f'No improvements for {self.target_metric} occurred in the last {self.no_improvement_counter}' + Color.YELLOW)
 
                 if ServerOptions.EARLY_STOP_VALUE in self.server_args:
                     if self.no_improvement_counter >= self.server_args[ServerOptions.EARLY_STOP_VALUE]:
@@ -309,13 +312,18 @@ class FedServer(FedNode):
             self.spnfl_logger.info(f'T_RETURN_1_END {len(self.metrics_responses)}')
 
             clients_metrics = []
-            for fed_client in self.fed_clients.values():
-                clients_metrics.append(fed_client.get_metrics_for_round(self.current_round))
+            clients_n_samples = []
+            for cid in selected_fed_clients:
+                st = self.fed_clients[cid]
+                m = st.get_metrics_for_round(self.current_round)
+                if m is not None:
+                    clients_metrics.append(m)
+                    clients_n_samples.append(st.get_dataset_info().get_num_samples())
 
-            agg_metric = self.aggregate_metrics(clients_metrics)
+            agg_metrics = self.aggregate_metrics(clients_metrics, clients_n_samples)
             # spnfl_logger.info(f'T_COMPUTE_START')
 
-            stop_fed = self.stop_condition(agg_metric)
+            stop_fed = self.stop_condition(agg_metrics)
 
 
             self.spnfl_logger.info(f'T_SAVE_START')
@@ -328,8 +336,10 @@ class FedServer(FedNode):
                 # para o caso em que o modelo converge ja no round 0
                 if not self.best_model:
                     self.best_model = self.last_model
+                    self.best_metrics = self.agg_metrics_by_round[self.current_round]
                 with open(self.best_model_file, "w", encoding="utf-8") as f:
                     f.write(self.best_model.to_json())
+                self.best_metrics.save_summary(self.metrics_summary_file)
                 self.spnfl_logger.info(f'T_SAVE_END')
 
             # calcular tempo do round e estimar tempo restante
