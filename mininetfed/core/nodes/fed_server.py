@@ -183,7 +183,7 @@ class FedServer(FedNode):
             print(Color.YELLOW + f'Stop condition by stop value was met' + Color.YELLOW)
             return True
         else:
-            if agg_target_metric >= self.best_target_metric:
+            if agg_target_metric > self.best_target_metric:
                 self.best_target_metric = agg_target_metric
                 self.best_metrics = agg_metrics
                 self.best_model = self.last_model
