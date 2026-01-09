@@ -9,7 +9,7 @@ server_args = {
     ServerOptions.NUM_ROUNDS       : 100,
     ServerOptions.TARGET_METRIC    : MetricType.ACCURACY,
     ServerOptions.STOP_VALUE       : 0.98,
-    ServerOptions.EARLY_STOP_VALUE : 10,
+    ServerOptions.PATIENT : 10,
     ServerOptions.CLIENT_ACCEPTOR  : ClientAcceptorType.ALL_CLIENTS,
     ServerOptions.CLIENT_SELECTOR  : ClientSelectorType.ALL_CLIENTS,
     ServerOptions.MODEL_AGGREGATOR : AggregatorType.FED_AVG

@@ -192,8 +192,8 @@ class FedServer(FedNode):
                 self.no_improvement_counter += 1
                 print(Color.YELLOW + f'No improvements for {self.target_metric} occurred in the last {self.no_improvement_counter}' + Color.YELLOW)
 
-                if ServerOptions.EARLY_STOP_VALUE in self.server_args:
-                    if self.no_improvement_counter >= self.server_args[ServerOptions.EARLY_STOP_VALUE]:
+                if ServerOptions.PATIENT in self.server_args:
+                    if self.no_improvement_counter >= self.server_args[ServerOptions.PATIENT]:
                         print(Color.YELLOW + f'Stop condition by early stop was met' + Color.YELLOW)
                         return True
         return False

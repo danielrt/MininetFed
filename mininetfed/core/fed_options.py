@@ -1,7 +1,7 @@
 class ServerOptions:
     MIN_CLIENTS = "min_clients"
     STOP_VALUE = "stop_value"
-    EARLY_STOP_VALUE = "early_stop_value"
+    PATIENT = "patient"
     NUM_ROUNDS = "num_rounds"
     TARGET_METRIC = "target_metric"
     MODEL_AGGREGATOR = "model_aggregator"
