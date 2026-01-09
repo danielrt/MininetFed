@@ -84,9 +84,9 @@ class FedServerNode(DockerFedNode):
         else:
             self.script = MININETFED_IMAGE_INSTALL_LOCATION + "/core/nodes/default_fed_server.py"
 
-        self.server_folder = server_folder or Path.cwd() / "server_output"
-        if not server_folder or len(server_folder):
-            self.server_folder.mkdir(exist_ok=True)
+        self.server_folder = Path(server_folder) if server_folder else (Path.cwd() / "server_output")
+        self.server_folder.mkdir(parents=True, exist_ok=True)
+
         self.server_args = server_args or {}
 
         server_docker_image = dimage
