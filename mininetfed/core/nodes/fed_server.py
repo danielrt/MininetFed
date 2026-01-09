@@ -187,7 +187,7 @@ class FedServer(FedNode):
                 self.best_target_metric = agg_target_metric
                 self.best_metrics = agg_metrics
                 self.best_model = self.last_model
-                self.no_improvement_counter += 1
+                self.no_improvement_counter = 0
             else:
                 self.no_improvement_counter += 1
                 print(Color.YELLOW + f'No improvements for {self.target_metric} occurred in the last {self.no_improvement_counter}' + Color.YELLOW)
