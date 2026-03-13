@@ -1,7 +1,9 @@
 import os
 import numpy as np
+import pandas as pd
 from keras.src.utils import to_categorical
 from sklearn.metrics import confusion_matrix
+
 
 from mininetfed.core.dto.client_info import ClientInfo
 from mininetfed.core.dto.dataset_info import DatasetInfo
@@ -42,21 +44,42 @@ class TrainerMINIST(FedClient):
         self.y_test = None
 
     def prepare_data(self, path_to_data: str) -> DatasetInfo:
-        # Carregar arquivo .npz
-        data = np.load(path_to_data + "/mnist_iid_N4_subset.npz")
-        X = data["X"].astype("float32") / 255.0
-        y = data["y"].astype("int32")
+        csv_path = os.path.join(path_to_data, "dataset_subset.csv")
 
-        # Adicionar canal (necessário para CNNs)
-        X = X[..., None]  # (N, 28, 28, 1)
+        if not os.path.exists(csv_path):
+            raise FileNotFoundError(f"Arquivo não encontrado: {csv_path}")
 
-        # Fazer o split
+        df = pd.read_csv(csv_path)
+
+        if "class" not in df.columns:
+            raise ValueError(
+                "A coluna target 'class' não foi encontrada em dataset_subset.csv"
+            )
+
+        # separa features e target
+        X = df.drop(columns=["class"]).to_numpy(dtype=np.float32)
+        y = df["class"].to_numpy(dtype=np.int32)
+
+        # valida formato esperado para MNIST
+        if X.shape[1] != 784:
+            raise ValueError(
+                f"Esperado 784 features para MNIST, mas encontrado {X.shape[1]}"
+            )
+
+        # normalização
+        X = X / 255.0
+
+        # reshape para CNN: (N, 28, 28, 1)
+        X = X.reshape(-1, 28, 28, 1)
+
+        # split train/test
         X_train, X_test, y_train, y_test = train_test_split(
-            X, y,
+            X,
+            y,
             test_size=0.2,
             random_state=42,
-            stratify=y,  # mantém distribuição das classes
-            shuffle=True
+            stratify=y,
+            shuffle=True,
         )
 
         y_train = to_categorical(y_train, num_classes=10)
@@ -65,7 +88,10 @@ class TrainerMINIST(FedClient):
         self.X_train, self.X_test = X_train, X_test
         self.y_train, self.y_test = y_train, y_test
 
-        return DatasetInfo(client_id=self.get_client_id(), num_samples=self.X_train.shape[0])
+        return DatasetInfo(
+            client_id=self.get_client_id(),
+            num_samples=self.X_train.shape[0],
+        )
 
 
     def set_client_info(self, client_info: ClientInfo):
@@ -73,7 +99,7 @@ class TrainerMINIST(FedClient):
 
     def fit(self) -> bool:
         try:
-            self.model.fit(x=self.X_train, y=self.y_train, batch_size=64, epochs=10, verbose=3)
+            self.model.fit(x=self.X_train, y=self.y_train, batch_size=64, epochs=2, verbose=3)
             return True
         except Exception as e:
             print(f"Training failed in client {self.get_client_id()}: {e}")

@@ -18,7 +18,6 @@ class FedClient(FedNode):
     def __init__(self):
         super().__init__()
         self.client_id : str = ""
-        self.client_folder : str = ""
         self.current_round = 0
         self.logger = None
         self.spnfl_logger = None
@@ -53,9 +52,6 @@ class FedClient(FedNode):
 
     def get_client_id(self) -> str:
         return self.client_id
-
-    def get_client_folder(self) -> str:
-        return self.client_folder
 
     def get_topics_to_subscribe(self) -> list[FedTopics]:
         return [FedTopics.CLIENT_SELECTION, FedTopics.CLIENT_ACCEPTED,
@@ -151,12 +147,12 @@ class FedClient(FedNode):
         self.logger.info(f'received aggregated weights!')
         agg_training_data = TrainingData.from_json(message.payload.decode("utf-8"))
 
+        self.update_weights(agg_training_data.get_weights())
+
         metrics = self.evaluate()
         print(f'sending eval metrics!\n')
         self.logger.info(f'sending eval metrics!')
         super().publish_to(FedTopics.CLIENT_METRICS, metrics.to_json())
-
-        self.update_weights(agg_training_data.get_weights())
 
         self.spnfl_logger.info(f'T_RETURN_1')
         self.spnfl_logger.info(f'END_ROUND {self.current_round}')

@@ -1,7 +1,11 @@
 import logging
 import time
+
+import numpy as np
 from numpy import ndarray
 import json
+import csv
+import os
 
 from mininetfed.core.fed_options import ServerOptions, AggregatorType, ClientSelectorType, \
     ClientAcceptorType
@@ -18,12 +22,22 @@ from mininetfed.core.dto.dataset_info import DatasetInfo
 from mininetfed.core.utils import Color
 
 
+def save_weights(path, weights: list[ndarray]):
+    """
+    Salva pesos agregados do modelo global (lista de ndarrays) como NPZ.
+    """
+    #path = os.path.join(super().get_node_folder(), f"model_{self.current_round}.npz")
+    payload = {f"p{i}": w for i, w in enumerate(weights)}
+    np.savez_compressed(path, **payload)
+
 class FedServer(FedNode):
     def __init__(self):
         super().__init__()
         self.best_model_file = ""
         self.last_model_file = ""
         self.metrics_summary_file = ""
+        self.learning_curve_file = ""
+        self.learning_curve_rows: list[dict] = []
 
         self.fed_clients: dict[str, ClientState] = {}
         self.training_responses: list[TrainingData] = []
@@ -53,6 +67,53 @@ class FedServer(FedNode):
         self.spnfl_logger.setLevel(logging.INFO)
         self.spnfl_logger.propagate = False
 
+    def _safe_get_metric(self, metrics: Metrics, metric_name: str, default=None):
+        try:
+            return metrics.get_metric(metric_name)
+        except Exception:
+            return default
+
+    def _append_learning_curve_row(
+            self,
+            round_id: int,
+            agg_metrics: Metrics,
+            n_selected_clients: int,
+            n_metric_responses: int,
+            round_duration: float,
+    ):
+        row = {
+            "round": round_id,
+            "accuracy": self._safe_get_metric(agg_metrics, MetricType.ACCURACY),
+            "precision": self._safe_get_metric(agg_metrics, MetricType.PRECISION),
+            "recall": self._safe_get_metric(agg_metrics, MetricType.RECALL),
+            "f1": self._safe_get_metric(agg_metrics, MetricType.F1),
+            "weighted_precision": self._safe_get_metric(agg_metrics, MetricType.WEIGHTED_PRECISION),
+            "weighted_recall": self._safe_get_metric(agg_metrics, MetricType.WEIGHTED_RECALL),
+            "weighted_f1": self._safe_get_metric(agg_metrics, MetricType.WEIGHTED_F1),
+            "micro_precision": self._safe_get_metric(agg_metrics, MetricType.MICRO_PRECISION),
+            "micro_recall": self._safe_get_metric(agg_metrics, MetricType.MICRO_RECALL),
+            "micro_f1": self._safe_get_metric(agg_metrics, MetricType.MICRO_F1),
+            "n_selected_clients": n_selected_clients,
+            "n_metric_responses": n_metric_responses,
+            "round_duration_sec": round_duration,
+        }
+        self.learning_curve_rows.append(row)
+
+    def save_learning_curve_csv(self):
+        if not self.learning_curve_rows:
+            self.logger.warning("No learning curve rows to save.")
+            return
+
+        fieldnames = list(self.learning_curve_rows[0].keys())
+
+        with open(self.learning_curve_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(self.learning_curve_rows)
+
+        self.logger.info(f"Learning curve CSV saved to {self.learning_curve_file}")
+        print(f"Learning curve CSV saved to {self.learning_curve_file}")
+
     def get_topics_to_subscribe(self) -> list[FedTopics]:
         return [FedTopics.CLIENT_REGISTER, FedTopics.CLIENT_READY,
                   FedTopics.CLIENT_WEIGHTS, FedTopics.CLIENT_METRICS]
@@ -63,6 +124,7 @@ class FedServer(FedNode):
         self.best_model_file = f'{server_folder}/best.model'
         self.last_model_file = f'{server_folder}/last.model'
         self.metrics_summary_file = f'{server_folder}/metrics_summary.txt'
+        self.learning_curve_file = f'{server_folder}/learning_curve.csv'
         self.server_args = server_args
 
         required = {ServerOptions.MIN_CLIENTS, ServerOptions.NUM_ROUNDS, ServerOptions.STOP_VALUE}
@@ -328,8 +390,11 @@ class FedServer(FedNode):
 
 
             self.spnfl_logger.info(f'T_SAVE_START')
-            with open(self.last_model_file, "w", encoding="utf-8") as f:
-                f.write(self.last_model.to_json())
+            # TODO: salvar metadados do treinamento para poder fazer resume
+            #with open(self.last_model_file, "w", encoding="utf-8") as f:
+                #f.write(self.last_model.to_json())
+            save_weights(self.last_model_file, self.last_model.get_weights())
+
             self.spnfl_logger.info(f'T_SAVE_END')
 
             if stop_fed:
@@ -338,8 +403,10 @@ class FedServer(FedNode):
                 if not self.best_model:
                     self.best_model = self.last_model
                     self.best_metrics = self.agg_metrics_by_round[self.current_round]
-                with open(self.best_model_file, "w", encoding="utf-8") as f:
-                    f.write(self.best_model.to_json())
+                # TODO: salvar metadados do treinamento para poder fazer resume
+                #with open(self.best_model_file, "w", encoding="utf-8") as f:
+                #    f.write(self.best_model.to_json())
+                save_weights(self.best_model_file, self.best_model.get_weights())
                 self.best_metrics.save_summary(self.metrics_summary_file)
                 self.spnfl_logger.info(f'T_SAVE_END')
 
@@ -347,6 +414,15 @@ class FedServer(FedNode):
             round_end_time = time.time()
             round_duration = round_end_time - round_start_time
             round_times.append(round_duration)
+
+            self._append_learning_curve_row(
+                round_id=self.current_round,
+                agg_metrics=agg_metrics,
+                n_selected_clients=len(selected_fed_clients),
+                n_metric_responses=len(clients_metrics),
+                round_duration=round_duration,
+            )
+
             rounds_left = self.num_rounds - self.current_round
             if self.current_round > 0 and rounds_left > 0:
                 avg_time = sum(round_times) / len(round_times)
@@ -364,5 +440,8 @@ class FedServer(FedNode):
         self.logger.info(f'{self.current_round} rounds were executed')
         print(Color.RED + f'stop condition was met!' + Color.RED)
         print(Color.YELLOW + f'{self.current_round} rounds were executed' + Color.YELLOW)
+
+        self.save_learning_curve_csv()
+
         super().publish_to(FedTopics.STOP, None)
         super().stop_communication_loop()
