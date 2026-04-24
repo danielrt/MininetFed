@@ -1,2 +1,0 @@
-sudo docker run --name ext_brk -it -p 1883:1883 -p 9001:9001 -v ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf eclipse-mosquitto
-sudo netstat -ano -p tcp | grep 1883

@@ -49,7 +49,7 @@ experiments_analysis:
 
   from:
     - experiment: 04_02_2024fed_sec_per_har
-      alias: fed per sec experiment
+      alias: core per sec experiment
       files:
         - 20h29m32sfed_sec_per_har.log
 

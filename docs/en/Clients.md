@@ -25,12 +25,12 @@ def set_args(self, args):
 
 def train_model(self):
     """
-    Trains the model on the training data.
+    Trains the dto on the training data.
     """
 
 def get_weights(self):
     """
-    Returns the model's weights. These can be in any format as long as they are compatible with the chosen aggregation function and the implementation of the update_weights function.
+    Returns the dto's weights. These can be in any format as long as they are compatible with the chosen aggregation function and the implementation of the update_weights function.
     """
 
 def get_num_samples(self):
@@ -45,13 +45,13 @@ def get_training_args(self):
 
 def all_metrics(self):
     """
-    Evaluates the model on the test data.
-    Returns a dictionary of all metrics used by the model.
+    Evaluates the dto on the test data.
+    Returns a dictionary of all metrics used by the dto.
     """
 
 def update_weights(self, weights):
     """
-    Updates the model's weights with the given weights. These can be in any format as long as they are compatible with the chosen aggregation function and the implementation of the get_weights function.
+    Updates the dto's weights with the given weights. These can be in any format as long as they are compatible with the chosen aggregation function and the implementation of the get_weights function.
     """
 
 def agg_response_extra_info(self, info):
@@ -61,8 +61,8 @@ def agg_response_extra_info(self, info):
 
 def eval_model(self):
     """
-    Evaluates the model on the test data.
-    Returns the model's accuracy as a value between 0 and 1.
+    Evaluates the dto on the test data.
+    Returns the dto's accuracy as a value between 0 and 1.
     """
 
 def get_stop_flag(self):

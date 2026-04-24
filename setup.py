@@ -1,24 +1,31 @@
-#!/usr/bin/env python
-
-"Setuptools params"
-
-from setuptools import setup, find_packages
+from setuptools import setup
 
 setup(
-    name='mininetfed',
-    version='1.0.0',
-    description='',
-    author='jjakob10',
-    author_email='johann.bastos@edu.ufes.br',
-    url='https://github.com/lprm-ufes/MininetFed',
-    packages=['federated', 'scripts'],
-    include_package_data=True,
-    package_data={
-        'mininetfed.scripts': ['clean.sh'],
-    },
+    name="mininetfed",
+    version="1.1.0",
+    zip_safe=False,
+    description="MininetFed",
+    package_dir={"": "."},
+    packages=[
+        "mininetfed.core",
+        "mininetfed.core.client_acceptors",
+        "mininetfed.core.client_selectors",
+        "mininetfed.core.metric_aggregators",
+        "mininetfed.core.model_aggregators",
+        "mininetfed.core.dto",
+        "mininetfed.core.nodes",
+        "mininetfed.sim",
+        "mininetfed.sim.util",
+        "mininetfed.bin",
+    ],
+    install_requires=[
+        "numpy",
+        "paho-mqtt",
+        "docker"
+    ],
     entry_points={
-        'console_scripts': [
-            'mnf_clean=scripts.clean:main',
-        ],
-    }
+        "console_scripts": [
+            "mininetfed-node-executor=mininetfed.bin.mininetfed_node_executor:main",
+        ]
+    },
 )
