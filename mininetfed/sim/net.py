@@ -1,11 +1,11 @@
 from time import sleep
 
-from containernet.net import Containernet
+from mininet.net import Mininet
 
 from mininetfed.sim.nodes import FedBrokerNode, FedClientNode, FedServerNode
 
 
-class MininetFed(Containernet):
+class MininetFed(Mininet):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
