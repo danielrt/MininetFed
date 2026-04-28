@@ -57,6 +57,10 @@ class FedServer(FedNode):
         self.server_args = None
         self.num_rounds = 0
         self.min_trainers = 0
+        self.progress_file = ""
+        self.last_target_metric_value = None
+        self.stop_reason = None
+        self.stop_reason_detail = None
 
         # general logger
         self.logger = logging.getLogger("server")
@@ -114,6 +118,54 @@ class FedServer(FedNode):
         self.logger.info(f"Learning curve CSV saved to {self.learning_curve_file}")
         print(f"Learning curve CSV saved to {self.learning_curve_file}")
 
+    def save_progress_json(
+            self,
+            round_id,
+            rounds_done,
+            rounds_left,
+            last_round_duration,
+            avg_round_duration,
+            estimated_remaining_sec,
+            status="running",
+    ):
+        """
+        Salva um resumo do progresso do treinamento federado em JSON.
+        Este arquivo pode ser lido pelo runFed() para exibir progresso geral
+        sem depender de terminal GUI ou parsing de logs.
+        """
+        patient = None
+        if self.server_args and ServerOptions.PATIENT in self.server_args:
+            patient = self.server_args[ServerOptions.PATIENT]
+
+        payload = {
+            "status": status,
+            "round": round_id,
+            "rounds_done": rounds_done,
+            "rounds_left": rounds_left,
+            "num_rounds": self.num_rounds,
+
+            "last_round_duration_sec": last_round_duration,
+            "avg_round_duration_sec": avg_round_duration,
+            "estimated_remaining_sec": estimated_remaining_sec,
+
+            "target_metric": str(self.target_metric),
+            "current_target_metric_value": self.last_target_metric_value,
+            "best_target_metric_value": self.best_target_metric,
+            "target_metric_stop_value": self.target_metric_stop_value,
+
+            "no_improvement_counter": self.no_improvement_counter,
+            "patience": patient,
+            "early_stop_enabled": patient is not None,
+
+            "stop_reason": self.stop_reason,
+            "stop_reason_detail": self.stop_reason_detail,
+        }
+
+        tmp_file = f"{self.progress_file}.tmp"
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp_file, self.progress_file)
+
     def get_topics_to_subscribe(self) -> list[FedTopics]:
         return [FedTopics.CLIENT_REGISTER, FedTopics.CLIENT_READY,
                   FedTopics.CLIENT_WEIGHTS, FedTopics.CLIENT_METRICS]
@@ -125,6 +177,7 @@ class FedServer(FedNode):
         self.last_model_file = f'{server_folder}/last.model'
         self.metrics_summary_file = f'{server_folder}/metrics_summary.txt'
         self.learning_curve_file = f'{server_folder}/learning_curve.csv'
+        self.progress_file = f'{server_folder}/progress.json'
         self.server_args = server_args
 
         required = {ServerOptions.MIN_CLIENTS, ServerOptions.NUM_ROUNDS, ServerOptions.STOP_VALUE}
@@ -236,28 +289,48 @@ class FedServer(FedNode):
         self.agg_metrics_by_round.append(agg_metrics)
         return agg_metrics
 
-    def stop_condition(self, agg_metrics : Metrics) -> bool:
+    def stop_condition(self, agg_metrics: Metrics) -> bool:
         agg_target_metric = agg_metrics.get_metric(self.target_metric)
+        self.last_target_metric_value = agg_target_metric
+
         self.logger.info(f'{self.target_metric}: {agg_target_metric}\n')
         print(Color.GREEN +
-              f'{self.target_metric} on round {self.current_round} was {agg_target_metric}\n' + Color.RESET)
-        if agg_target_metric >= self.target_metric_stop_value:
-            print(Color.YELLOW + f'Stop condition by stop value was met' + Color.YELLOW)
-            return True
-        else:
-            if agg_target_metric > self.best_target_metric:
-                self.best_target_metric = agg_target_metric
-                self.best_metrics = agg_metrics
-                self.best_model = self.last_model
-                self.no_improvement_counter = 0
-            else:
-                self.no_improvement_counter += 1
-                print(Color.YELLOW + f'No improvements for {self.target_metric} occurred in the last {self.no_improvement_counter}' + Color.YELLOW)
+              f'{self.target_metric} on round {self.current_round} was {agg_target_metric}\n' +
+              Color.RESET)
 
-                if ServerOptions.PATIENT in self.server_args:
-                    if self.no_improvement_counter >= self.server_args[ServerOptions.PATIENT]:
-                        print(Color.YELLOW + f'Stop condition by early stop was met' + Color.YELLOW)
-                        return True
+        if agg_target_metric >= self.target_metric_stop_value:
+            self.stop_reason = "stop_value"
+            self.stop_reason_detail = (
+                f"{self.target_metric} reached stop value: "
+                f"{agg_target_metric} >= {self.target_metric_stop_value}"
+            )
+            print(Color.YELLOW + 'Stop condition by stop value was met' + Color.RESET)
+            return True
+
+        if agg_target_metric > self.best_target_metric:
+            self.best_target_metric = agg_target_metric
+            self.best_metrics = agg_metrics
+            self.best_model = self.last_model
+            self.no_improvement_counter = 0
+        else:
+            self.no_improvement_counter += 1
+            print(Color.YELLOW +
+                  f'No improvements for {self.target_metric} occurred in the last '
+                  f'{self.no_improvement_counter}' +
+                  Color.RESET)
+
+            if ServerOptions.PATIENT in self.server_args:
+                patient = self.server_args[ServerOptions.PATIENT]
+                if self.no_improvement_counter >= patient:
+                    self.stop_reason = "early_stop"
+                    self.stop_reason_detail = (
+                        f"Early stop triggered: no improvement for "
+                        f"{self.no_improvement_counter} rounds "
+                        f"(patience={patient})"
+                    )
+                    print(Color.YELLOW + 'Stop condition by early stop was met' + Color.RESET)
+                    return True
+
         return False
 
     def get_num_ready_clients(self) -> int:
@@ -423,23 +496,64 @@ class FedServer(FedNode):
                 round_duration=round_duration,
             )
 
-            rounds_left = self.num_rounds - self.current_round
-            if self.current_round > 0 and rounds_left > 0:
-                avg_time = sum(round_times) / len(round_times)
-                est_remaining = avg_time * rounds_left
+            rounds_done = self.current_round + 1
+            rounds_left = max(self.num_rounds - rounds_done, 0)
+            usable_times = round_times[1:] if len(round_times) > 1 else round_times
+            avg_time = sum(usable_times) / len(usable_times)
+            est_remaining = avg_time * rounds_left
+
+            self.save_progress_json(
+                round_id=self.current_round,
+                rounds_done=rounds_done,
+                rounds_left=rounds_left,
+                last_round_duration=round_duration,
+                avg_round_duration=avg_time,
+                estimated_remaining_sec=est_remaining,
+                status="finished" if stop_fed else "running",
+            )
+
+            if rounds_left > 0 and not stop_fed:
                 mins, secs = divmod(int(est_remaining), 60)
                 print(
-                    Color.BLUE + f"Estimated time remaining until the end of the experiment: {mins}m {secs}s" + Color.RESET)
+                    Color.BLUE +
+                    f"Round {self.current_round} finished in {round_duration:.2f}s. "
+                    f"Average: {avg_time:.2f}s/round. "
+                    f"Estimated remaining time: {mins}m {secs}s "
+                    f"({rounds_left} rounds left)." +
+                    Color.RESET
+                )
 
             self.spnfl_logger.info(f'ROUND_DURATION {round_duration}')
             self.spnfl_logger.info(f'END_ROUND {self.current_round}')
 
             self.current_round += 1
 
-        self.logger.info('stop condition was met')
+        if self.stop_reason is None:
+            self.stop_reason = "max_rounds"
+            self.stop_reason_detail = (
+                f"Maximum number of rounds reached: "
+                f"{self.current_round}/{self.num_rounds}"
+            )
+
+        last_duration = round_times[-1] if round_times else None
+        avg_duration = (sum(round_times) / len(round_times)) if round_times else None
+
+        self.save_progress_json(
+            round_id=self.current_round - 1 if self.current_round > 0 else None,
+            rounds_done=self.current_round,
+            rounds_left=max(self.num_rounds - self.current_round, 0),
+            last_round_duration=last_duration,
+            avg_round_duration=avg_duration,
+            estimated_remaining_sec=0,
+            status="finished",
+        )
+
+        self.logger.info('training finished')
         self.logger.info(f'{self.current_round} rounds were executed')
-        print(Color.RED + f'stop condition was met!' + Color.RED)
-        print(Color.YELLOW + f'{self.current_round} rounds were executed' + Color.YELLOW)
+        self.logger.info(f'Stop reason: {self.stop_reason_detail}')
+        print(Color.RED + 'training finished!' + Color.RESET)
+        print(Color.YELLOW + f'{self.current_round} rounds were executed' + Color.RESET)
+        print(Color.YELLOW + f'Stop reason: {self.stop_reason_detail}' + Color.RESET)
 
         self.save_learning_curve_csv()
 

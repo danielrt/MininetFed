@@ -5,14 +5,15 @@ from mininetfed.sim.nodes import FedServerNode, FedClientNode, FedBrokerNode
 from mininetfed.sim.util.clients_generator import create_federated_client_datasets
 from mininetfed.sim.util.docker_utils import build_fed_node_docker_image
 
-import debugpy
+## debug para vscode com sudo
+#import debugpy
 
-debugpy.listen(("127.0.0.1", 5678))
-print("Aguardando VS Code debugger na porta 5678...")
-debugpy.wait_for_client()
-print("Debugger conectado!")
+#debugpy.listen(("127.0.0.1", 5678))
+#print("Aguardando VS Code debugger na porta 5678...")
+#debugpy.wait_for_client()
+#print("Debugger conectado!")
 
-debugpy.breakpoint()
+#debugpy.breakpoint()
 
 n_clients = 4
 client_code_path = "client_code/"
@@ -32,14 +33,14 @@ server_args = {
 
 def configure_experiment():
 
-    #client_paths = create_federated_client_datasets(
-    #    dataset_source="openml:mnist_784",
-    #    target_col="class",
-    #    n_clients=n_clients,
-    #    split_mode="iid",
-    #    code_src_dir=client_code_path,
-    #    openml_version=1,
-    #)
+    client_paths = create_federated_client_datasets(
+        dataset_source="openml:mnist_784",
+        target_col="class",
+        n_clients=n_clients,
+        split_mode="iid",
+        code_src_dir=client_code_path,
+        openml_version=1,
+    )
 
     client_dimage = build_fed_node_docker_image("basic_client", client_code_path + "client_requirements.txt")["tag"]
 
@@ -65,7 +66,7 @@ def configure_experiment():
         net.addNAT(name='nat0', linkTo='s1', ip='192.168.210.254').configDefault()
         s1.start([])
 
-        net.runFed()
+        net.runFed(show_term=True)
     finally:
         # isso garante limpeza mesmo se der exceção no meio
         net.stop()

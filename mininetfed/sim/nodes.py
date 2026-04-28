@@ -548,163 +548,239 @@ class Docker(Host):
             error("Problem reading cgroup info: %r\n" % cmd)
             return -1
 
-class DockerFedNode(Docker):
-    """Node that represents a docker container of a MininerFed server."""
-    def __init__(self, name : str, node_folder : str, dimage : str, **kwargs):
 
+class DockerFedNode(Docker):
+    """Base class for Dockerized MininetFed nodes."""
+
+    def __init__(self, name: str, node_folder: str, dimage: str, **kwargs):
         abs_folder_path = os.path.abspath(node_folder)
         volumes = [f"{abs_folder_path}:{DOCKER_NODE_FOLDER}:rw"]
 
         if not dimage:
-            raise ImageNotFound(f"No Image Docker was provided.")
+            raise ImageNotFound("No Docker image was provided.")
 
         if not docker_image_exists(dimage):
-            raise ImageNotFound(f"Image Docker {dimage} was not found.")
+            raise ImageNotFound(f"Docker image {dimage} was not found.")
 
+        self.executor_processes = []
         Docker.__init__(self, name=name, dimage=dimage, volumes=volumes, **kwargs)
 
-    def run(self, broker_addr) -> Path:
-        pass
+    @staticmethod
+    def _cleanup_host_files(host_folder: Path, wait_for_done: bool = True) -> None:
+        """Remove stale execution files from previous runs."""
+        files = ["out.txt", "err.txt", "exit_code.txt"]
+        if wait_for_done:
+            files.append(".done")
 
-class FedClientNode(DockerFedNode):
-    """Node that represents a docker container of a MininerFed server."""
-    def __init__(self, name : str, script: str, client_folder : str, dimage : str | None = None, client_args : dict | None = None, **kwargs):
-        self.client_id = name
-        self.client_folder = os.path.abspath(client_folder)
-        if len(script):
-            self.script = DOCKER_NODE_FOLDER + "/" + script
-        else:
-            raise FileNotFoundError(f"No execution script was provided for client {self.client_id}")
-        self.client_args = client_args or {}
+        for filename in files:
+            (host_folder / filename).unlink(missing_ok=True)
 
-        super().__init__(name=name, node_folder=self.client_folder, dimage=dimage, **kwargs)
-        self.cmd("ifconfig eth0 down")
+    def _run_executor(
+        self,
+        *,
+        node_label: str,
+        script: str,
+        node_id: str,
+        broker_addr: str,
+        node_args: dict | None,
+        host_folder: Path,
+        show_term: bool = True,
+        wait_for_done: bool = True,
+    ) -> Path | None:
+        """
+        Run mininetfed-node-executor either in a GUI terminal or in headless mode.
 
-    def run(self, broker_addr):
-        self.cmd("route add default gw %s" % broker_addr)
+        Files written inside the mounted folder:
+        - out.txt: stdout
+        - err.txt: stderr
+        - exit_code.txt: process exit code
+        - .done: completion marker, only when wait_for_done=True
+        """
+        self._cleanup_host_files(host_folder, wait_for_done=wait_for_done)
 
-        # JSON dos args, protegido para shell
-        args_json = shlex.quote(json.dumps(self.client_args))
-
+        args_json = shlex.quote(json.dumps(node_args or {}))
         done_file = f"{DOCKER_NODE_FOLDER}/.done"
+        out_file = f"{DOCKER_NODE_FOLDER}/out.txt"
+        err_file = f"{DOCKER_NODE_FOLDER}/err.txt"
+        exit_code_file = f"{DOCKER_NODE_FOLDER}/exit_code.txt"
 
-        # Comando “interno” (sem bash -c ainda)
-        inner_cmd = (
-            "umask 000; "
+        executor_cmd = (
             f"mininetfed-node-executor "
-            f"--file {shlex.quote(self.script)} "
-            f"--node_id {shlex.quote(self.client_id)} "
+            f"--file {shlex.quote(script)} "
+            f"--node_id {shlex.quote(node_id)} "
             f"--broker_addr {shlex.quote(broker_addr)} "
             f"--node_folder {DOCKER_NODE_FOLDER} "
-            f"--node_args-json {args_json} "
-            f"2> {DOCKER_NODE_FOLDER}/err.txt; "
-            f"echo DONE > {shlex.quote(done_file)}; "
-            "exec bash"
+            f"--node_args-json {args_json}"
         )
 
-        # Agora embrulha tudo em um bash -lc '<inner_cmd>'
-        cmd = f"bash -lc {shlex.quote(inner_cmd)}"
+        done_cmd = f"echo DONE > {shlex.quote(done_file)}" if wait_for_done else ":"
 
-        print(f"[FedServerNode] Abrindo terminal com: {cmd}")
-        makeTerm(self, cmd=cmd)
+        if show_term:
+            # Keep stdout/stderr visible in the GUI terminal and also persist them to files.
+            # Requires bash, which is already used through bash -lc.
+            inner_cmd = (
+                "umask 000; "
+                f"rm -f {out_file} {err_file} {exit_code_file} {done_file}; "
+                f"PYTHONUNBUFFERED=1 {executor_cmd} "
+                f"2> >(tee -a {err_file} >&2) | tee -a {out_file}; "
+                "exit_code=${PIPESTATUS[0]}; "
+                f"echo $exit_code > {exit_code_file}; "
+                f"{done_cmd}; "
+                "exec bash"
+            )
+            cmd = f"bash -lc {shlex.quote(inner_cmd)}"
+            print(f"[{node_label}] Opening GUI terminal with: {cmd}")
+            processes = makeTerm(self, cmd=cmd) or []
+        else:
+            # Headless execution: no xterm/gnome-terminal. Output is stored in files.
+            inner_cmd = (
+                "umask 000; "
+                f"rm -f {out_file} {err_file} {exit_code_file} {done_file}; "
+                f"PYTHONUNBUFFERED=1 {executor_cmd} > {out_file} 2> {err_file}; "
+                "exit_code=$?; "
+                f"echo $exit_code > {exit_code_file}; "
+                f"{done_cmd}"
+            )
+            cmd = f"bash -lc {shlex.quote(inner_cmd)}"
+            print(f"[{node_label}] Running headless with: {cmd}")
+            proc = self.popen(cmd, shell=True)
+            processes = [proc] if proc is not None else []
 
-        return Path(f"{self.client_folder}/.done")
+        self.executor_processes.extend(processes)
+        return host_folder / ".done" if wait_for_done else None
+
+    def run(self, broker_addr: str, show_term: bool = True) -> Path | None:
+        raise NotImplementedError
+
+
+class FedClientNode(DockerFedNode):
+    """Node that represents a Dockerized MininetFed client."""
+
+    def __init__(
+        self,
+        name: str,
+        script: str,
+        client_folder: str,
+        dimage: str | None = None,
+        client_args: dict | None = None,
+        **kwargs,
+    ):
+        self.client_id = name
+        self.client_folder = Path(client_folder).resolve()
+
+        if script and len(script):
+            self.script = f"{DOCKER_NODE_FOLDER}/{script}"
+        else:
+            raise FileNotFoundError(f"No execution script was provided for client {self.client_id}")
+
+        self.client_args = client_args or {}
+
+        super().__init__(
+            name=name,
+            node_folder=str(self.client_folder),
+            dimage=dimage,
+            **kwargs,
+        )
+        self.cmd("ifconfig eth0 down")
+
+    def run(self, broker_addr: str, show_term: bool = True) -> Path | None:
+        self.cmd(f"route add default gw {broker_addr}")
+        return self._run_executor(
+            node_label="FedClientNode",
+            script=self.script,
+            node_id=self.client_id,
+            broker_addr=broker_addr,
+            node_args=self.client_args,
+            host_folder=self.client_folder,
+            show_term=show_term,
+            wait_for_done=True,
+        )
+
 
 class FedServerNode(DockerFedNode):
-    """Node that represents a docker container of a MininerFed server."""
-    def __init__(self, name : str, script: str | None = None, server_folder : str | None = None, dimage : str | None = None, server_args : dict | None = None, **kwargs):
-        self.server_id = name
-        # quando script não for passado como parametro, tem que executar o no server implementacao padrao
-        if script and len(script):
-            self.script = DOCKER_NODE_FOLDER + "/" + script
-        else:
-            self.script = MININETFED_IMAGE_INSTALL_LOCATION + "/core/nodes/default_fed_server.py"
+    """Node that represents a Dockerized MininetFed server."""
 
-        self.server_folder = Path(server_folder) if server_folder else (Path.cwd() / "server_output")
+    def __init__(
+        self,
+        name: str,
+        script: str | None = None,
+        server_folder: str | None = None,
+        dimage: str | None = None,
+        server_args: dict | None = None,
+        **kwargs,
+    ):
+        self.server_id = name
+
+        if script and len(script):
+            self.script = f"{DOCKER_NODE_FOLDER}/{script}"
+        else:
+            self.script = f"{MININETFED_IMAGE_INSTALL_LOCATION}/core/nodes/default_fed_server.py"
+
+        self.server_folder = Path(server_folder).resolve() if server_folder else (Path.cwd() / "server_output").resolve()
         self.server_folder.mkdir(parents=True, exist_ok=True)
 
         self.server_args = server_args or {}
 
-        server_docker_image = dimage
-        if not server_docker_image:
-            server_docker_image = build_fed_node_docker_image("server")["tag"]
+        server_docker_image = dimage or build_fed_node_docker_image("server")["tag"]
 
-        super().__init__(name= name, node_folder = self.server_folder, dimage = server_docker_image, **kwargs)
+        super().__init__(
+            name=name,
+            node_folder=str(self.server_folder),
+            dimage=server_docker_image,
+            **kwargs,
+        )
         self.cmd("ifconfig eth0 down")
 
-    def run(self, broker_addr):
-        self.cmd("route add default gw %s" % broker_addr)
-
-        # JSON dos args, protegido para shell
-        args_json = shlex.quote(json.dumps(self.server_args))
-
-        done_file = f"{DOCKER_NODE_FOLDER}/.done"
-
-        # Comando “interno” (sem bash -c ainda)
-        inner_cmd = (
-            "umask 000; "
-            f"mininetfed-node-executor "
-            f"--file {shlex.quote(self.script)} "
-            f"--node_id {shlex.quote(self.server_id)} "
-            f"--broker_addr {shlex.quote(broker_addr)} "
-            f"--node_folder {DOCKER_NODE_FOLDER} "
-            f"--node_args-json {args_json} "
-            f"2> {DOCKER_NODE_FOLDER}/err.txt; "
-            f"echo DONE > {shlex.quote(done_file)}; "
-            "exec bash"
+    def run(self, broker_addr: str, show_term: bool = True) -> Path | None:
+        self.cmd(f"route add default gw {broker_addr}")
+        return self._run_executor(
+            node_label="FedServerNode",
+            script=self.script,
+            node_id=self.server_id,
+            broker_addr=broker_addr,
+            node_args=self.server_args,
+            host_folder=self.server_folder,
+            show_term=show_term,
+            wait_for_done=True,
         )
 
-        # Agora embrulha tudo em um bash -lc '<inner_cmd>'
-        cmd = f"bash -lc {shlex.quote(inner_cmd)}"
-
-        print(f"[FedServerNode] Abrindo terminal com: {cmd}")
-        makeTerm(self, cmd=cmd)
-
-        return Path(f"{self.server_folder}/.done")
 
 class FedBrokerNode(DockerFedNode):
-    """Node that represents a docker container of a MininerFed broker."""
-    def __init__(self, name : str, broker_folder : str | None = None, dimage : str | None = None, broker_args : dict | None = None, **kwargs):
+    """Node that represents a Dockerized MininetFed broker."""
+
+    def __init__(
+        self,
+        name: str,
+        broker_folder: str | None = None,
+        dimage: str | None = None,
+        broker_args: dict | None = None,
+        **kwargs,
+    ):
         self.broker_id = name
-        self.script = MININETFED_IMAGE_INSTALL_LOCATION + "/core/nodes/default_fed_broker.py"
-        self.broker_folder = broker_folder or Path.cwd() / "broker_output"
-        if not broker_folder or len(broker_folder):
-            self.broker_folder.mkdir(exist_ok=True)
+        self.script = f"{MININETFED_IMAGE_INSTALL_LOCATION}/core/nodes/default_fed_broker.py"
+        self.broker_folder = Path(broker_folder).resolve() if broker_folder else (Path.cwd() / "broker_output").resolve()
+        self.broker_folder.mkdir(parents=True, exist_ok=True)
         self.broker_args = broker_args or {}
 
-        broker_docker_image = dimage
-        if not broker_docker_image:
-            broker_docker_image = build_fed_broker_docker_image()["tag"]
+        broker_docker_image = dimage or build_fed_broker_docker_image()["tag"]
 
-        super().__init__(name= name, node_folder = self.broker_folder, dimage = broker_docker_image, **kwargs)
+        super().__init__(
+            name=name,
+            node_folder=str(self.broker_folder),
+            dimage=broker_docker_image,
+            **kwargs,
+        )
         self.cmd("iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE")
 
-    def run(self, broker_addr = ""):
+    def run(self, broker_addr: str = "", show_term: bool = True) -> Path | None:
         broker_addr = self.IP(intf=f"{self.broker_id}-eth0")
-
-        # JSON dos args, protegido para shell
-        args_json = shlex.quote(json.dumps(self.broker_args))
-
-        # Comando “interno” (sem bash -c ainda)
-        inner_cmd = (
-            "umask 000; "
-            f"mininetfed-node-executor "
-            f"--file {shlex.quote(self.script)} "
-            f"--node_id {shlex.quote(self.broker_id)} "
-            f"--broker_addr {shlex.quote(broker_addr)} "
-            f"--node_folder {DOCKER_NODE_FOLDER} "
-            f"--node_args-json {args_json} "
-            f"2> /flw/err.txt"
+        return self._run_executor(
+            node_label="FedBrokerNode",
+            script=self.script,
+            node_id=self.broker_id,
+            broker_addr=broker_addr,
+            node_args=self.broker_args,
+            host_folder=self.broker_folder,
+            show_term=show_term,
+            wait_for_done=False,
         )
-
-        # Agora embrulha tudo em um bash -lc '<inner_cmd>'
-        cmd = f"bash -lc {shlex.quote(inner_cmd)}"
-
-        print(f"[FedBrokerNode] Abrindo terminal com: {cmd}")
-        makeTerm(self, cmd=cmd)
-
-        return Path("")
-
-
-
-
