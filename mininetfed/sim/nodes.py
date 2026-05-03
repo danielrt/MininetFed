@@ -75,7 +75,8 @@ class Docker(Host):
                      'devices': [],
                      'cap_add': ['net_admin'],  # we need this to allow mininet network setup
                      #'storage_opt': None,
-                     'sysctls': {}
+                     'sysctls': {},
+                     'use_gpu': False
                      }
         defaults.update( kwargs )
 
@@ -107,6 +108,7 @@ class Docker(Host):
         self.devices = defaults['devices']
         self.cap_add = defaults['cap_add']
         self.sysctls = defaults['sysctls']
+        self.use_gpu = defaults.get('use_gpu', False)
         #self.storage_opt = defaults['storage_opt']
 
         # setup docker client
@@ -123,9 +125,38 @@ class Docker(Host):
         debug("dcmd: %s\n" % str(self.dcmd))
         #info("%s: kwargs %s\n" % (name, str(kwargs)))
 
-        # creats host config for container
+        # creates host config for container
         # see: https://docker-py.readthedocs.org/en/latest/hostconfig/
-        hc = self.dcli.create_host_config(
+        #
+        # GPU support:
+        #   docker run --gpus all ... is represented in Docker API as
+        #   HostConfig.DeviceRequests. For compatibility with installations
+        #   configured by nvidia-ctk, we also set runtime="nvidia".
+        #
+        # Important: the rest of this class intentionally keeps the low-level
+        # Docker API because Containernet/Mininet code below expects dicts such
+        # as self.dc = {"Id": ...}.
+        device_requests = None
+        docker_runtime = None
+
+        if self.use_gpu:
+            # Use the raw dict representation. This is the most stable format
+            # for docker.APIClient.create_host_config across docker-py versions.
+            device_requests = [{
+                "Driver": "nvidia",
+                "Count": -1,
+                "DeviceIDs": [],
+                "Capabilities": [["gpu"]],
+                "Options": {},
+            }]
+            docker_runtime = "nvidia"
+
+            if self.environment is None:
+                self.environment = {}
+            self.environment.setdefault("NVIDIA_VISIBLE_DEVICES", "all")
+            self.environment.setdefault("NVIDIA_DRIVER_CAPABILITIES", "compute,utility")
+
+        host_config_kwargs = dict(
             network_mode=self.network_mode,
             privileged=self.privileged,
             binds=self.volumes,
@@ -141,6 +172,12 @@ class Docker(Host):
             sysctls=self.sysctls,  # see docker-py docu
             #storage_opt=self.storage_opt
         )
+
+        if self.use_gpu:
+            host_config_kwargs["device_requests"] = device_requests
+            host_config_kwargs["runtime"] = docker_runtime
+
+        hc = self.dcli.create_host_config(**host_config_kwargs)
 
         if kwargs.get("rm", False):
             container_list = self.dcli.containers(all=True)
@@ -179,6 +216,20 @@ class Docker(Host):
         # fetch information about new container
         self.dcinfo = self.dcli.inspect_container(self.dc)
         self.did = self.dcinfo.get("Id")
+
+        if self.use_gpu:
+            host_cfg = self.dcinfo.get("HostConfig", {}) or {}
+            dev_reqs = host_cfg.get("DeviceRequests")
+            runtime = host_cfg.get("Runtime")
+            if dev_reqs:
+                info(f"*** Docker host {name}: GPU habilitada via DeviceRequests={dev_reqs}\n")
+            elif runtime == "nvidia":
+                info(f"*** Docker host {name}: GPU habilitada via runtime=nvidia\n")
+            else:
+                warn(
+                    f"Warning: Docker host {name} foi criado com use_gpu=True, "
+                    "mas o Docker não retornou DeviceRequests/runtime=nvidia no inspect.\n"
+                )
 
         # call original Node.__init__
         Node.__init__(self, name, **kwargs)
@@ -663,6 +714,8 @@ class FedClientNode(DockerFedNode):
         client_folder: str,
         dimage: str | None = None,
         client_args: dict | None = None,
+        requirements_file: str | None = None,
+        use_gpu: bool = False,
         **kwargs,
     ):
         self.client_id = name
@@ -675,10 +728,17 @@ class FedClientNode(DockerFedNode):
 
         self.client_args = client_args or {}
 
+        client_docker_image = dimage or build_fed_node_docker_image(
+            "client",
+            requirements_file=requirements_file,
+            use_gpu=use_gpu,
+        )["tag"]
+
         super().__init__(
             name=name,
             node_folder=str(self.client_folder),
-            dimage=dimage,
+            dimage=client_docker_image,
+            use_gpu=use_gpu,
             **kwargs,
         )
         self.cmd("ifconfig eth0 down")
@@ -707,6 +767,8 @@ class FedServerNode(DockerFedNode):
         server_folder: str | None = None,
         dimage: str | None = None,
         server_args: dict | None = None,
+        requirements_file: str | None = None,
+        use_gpu: bool = False,
         **kwargs,
     ):
         self.server_id = name
@@ -721,12 +783,17 @@ class FedServerNode(DockerFedNode):
 
         self.server_args = server_args or {}
 
-        server_docker_image = dimage or build_fed_node_docker_image("server")["tag"]
+        server_docker_image = dimage or build_fed_node_docker_image(
+            "server",
+            requirements_file=requirements_file,
+            use_gpu=use_gpu,
+        )["tag"]
 
         super().__init__(
             name=name,
             node_folder=str(self.server_folder),
             dimage=server_docker_image,
+            use_gpu=use_gpu,
             **kwargs,
         )
         self.cmd("ifconfig eth0 down")

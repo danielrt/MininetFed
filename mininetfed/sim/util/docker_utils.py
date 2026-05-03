@@ -6,9 +6,9 @@ import hashlib
 from pathlib import Path
 import docker
 
-
 IMAGE_PYTHON_VERSION = "python3.10"
 MININETFED_IMAGE_INSTALL_LOCATION = "/usr/local/lib/python3.10/site-packages/mininetfed"
+
 
 # ----------------- utilidades -----------------
 
@@ -18,6 +18,7 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(8192), b""):
             h.update(chunk)
     return h.hexdigest()
+
 
 def _sha256_dir(root: Path, ignore_ext={".pyc"}, ignore_names={"__pycache__"}):
     root = root.resolve()
@@ -34,6 +35,7 @@ def _sha256_dir(root: Path, ignore_ext={".pyc"}, ignore_names={"__pycache__"}):
                 for chunk in iter(lambda: fh.read(8192), b""):
                     h.update(chunk)
     return h.hexdigest()
+
 
 def _find_mininetfed_on_host():
     """
@@ -124,6 +126,7 @@ def _add_bytes(tar: tarfile.TarFile, arcname: str, data: bytes, mode: int = 0o64
     info.mode = mode
     tar.addfile(info, io.BytesIO(data))
 
+
 def _add_file(tar: tarfile.TarFile, src: Path, arcname: str, mode: int | None = None):
     if mode is None:
         tar.add(str(src), arcname=arcname, recursive=False)
@@ -131,6 +134,7 @@ def _add_file(tar: tarfile.TarFile, src: Path, arcname: str, mode: int | None = 
         # força modo (útil para scripts executáveis)
         data = src.read_bytes()
         _add_bytes(tar, arcname, data, mode=mode)
+
 
 def _add_dir_recursive(tar: tarfile.TarFile, src_dir: Path, arc_prefix: str):
     src_dir = src_dir.resolve()
@@ -153,6 +157,7 @@ def _add_dir_recursive(tar: tarfile.TarFile, src_dir: Path, arc_prefix: str):
             arc = str(Path(arc_prefix) / rel_root / f).replace("\\", "/")
             tar.add(str(fpath), arcname=arc, recursive=False)
 
+
 def _image_labels_match(client, tag: str, labels: dict) -> bool:
     from docker.errors import ImageNotFound
     try:
@@ -165,6 +170,7 @@ def _image_labels_match(client, tag: str, labels: dict) -> bool:
             return False
     return True
 
+
 def _image_exists(client, tag: str) -> bool:
     from docker.errors import ImageNotFound
     try:
@@ -173,35 +179,46 @@ def _image_exists(client, tag: str) -> bool:
     except ImageNotFound:
         return False
 
+
 # ----------------- funçoes públicas -----------------
 
 def docker_image_exists(tag: str) -> bool:
     client = docker.from_env()
     return _image_exists(client, tag)
 
-def build_fed_node_docker_image(name: str, requirements_file: str | None = None) -> dict:
+
+def build_fed_node_docker_image(
+        name: str,
+        requirements_file: str | None = None,
+        use_gpu: bool = False,
+) -> dict:
     """
-    Constrói/atualiza a imagem 'mininetfed:{name}' a partir de python:3.10-slim, instalando:
-      - net-tools, iputils-ping, iproute2, curl
-      - numpy, paho-mqtt
-      - (opcional) pacotes do requirements do host
-      - pacote 'mininetfed' a partir da instalação do host
-      - shim 'mininetfed-node-executor' em /usr/local/bin (executável)
+    Constrói/atualiza a imagem Docker 'mininetfed:{name}' ou
+    'mininetfed:{name}-gpu'.
+
+    CPU (padrão):
+      - python:3.10-slim
+
+    GPU:
+      - nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+      - requer NVIDIA Container Toolkit configurado no host
+      - o container também precisa ser criado com device_requests=[gpu]
 
     Idempotência via LABELs:
-      - req.sha256       : hash do requirements_file (ou 'none' se não houver)
+      - req.sha256       : hash do requirements_file (ou 'none')
       - mininetfed.sha256: hash do diretório do pacote 'mininetfed' no host
-      - exec.sha256      : hash do texto do shim do executor
+      - exec.sha256      : hash do shim do executor
+      - gpu.enabled      : true/false
 
-    Retorna: {"tag": str, "action": "skipped"|"rebuilt"|"created"}
+    Retorna: {"tag": str, "action": "skipped"|"rebuilt"|"created", "gpu": bool}
     """
-    tag = f"mininetfed:{name}"
+    tag = f"mininetfed:{name}-gpu" if use_gpu else f"mininetfed:{name}"
 
     # ====== requirements opcional ======
     req_sha = "none"
     req_path: Path | None = None
-    requirements_copy_block = ""   # trecho COPY ...
-    pip_install_block = ""         # trecho RUN pip ...
+    requirements_copy_block = ""
+    pip_install_block = ""
 
     if requirements_file is not None and requirements_file.strip():
         req_path = Path(requirements_file).resolve()
@@ -215,24 +232,23 @@ def build_fed_node_docker_image(name: str, requirements_file: str | None = None)
         """).rstrip()
 
         pip_install_block = textwrap.dedent("""\
-            # instalar numpy, paho-mqtt e depois os pacotes do requirements
-            RUN pip install --no-cache-dir numpy paho-mqtt \\
-             && pip install --no-cache-dir -r /tmp/requirements.txt
+            # instalar dependências base e depois os pacotes do requirements
+            RUN python3 -m pip install --no-cache-dir --upgrade pip \\
+             && python3 -m pip install --no-cache-dir numpy paho-mqtt \\
+             && python3 -m pip install --no-cache-dir -r /tmp/requirements.txt
         """).rstrip()
     else:
-        # sem requirements.txt: instala apenas numpy e paho-mqtt
         pip_install_block = textwrap.dedent("""\
             # instalar numpy e paho-mqtt (sem requirements.txt)
-            RUN pip install --no-cache-dir numpy paho-mqtt
+            RUN python3 -m pip install --no-cache-dir --upgrade pip \\
+             && python3 -m pip install --no-cache-dir numpy paho-mqtt
         """).rstrip()
     # ===================================
 
     # Diretório do pacote mininetfed no host
     fed_pkg_dir, fed_sha = _find_mininetfed_on_host()
 
-    # --- SHIM fixo para o executor ---
-    # Import compatível com a estrutura dentro do site-packages do container:
-    # /usr/local/lib/python3.10/site-packages/mininetfed/mininetfed/bin/...
+    # Shim fixo para o executor
     shim_text = """#!/usr/bin/env python3
 from mininetfed.bin.mininetfed_node_executor import main
 
@@ -240,34 +256,62 @@ if __name__ == "__main__":
     raise SystemExit(main())
 """
     exec_sha = hashlib.sha256(shim_text.encode("utf-8")).hexdigest()
-    # ---------------------------------
+
+    base_image = (
+        "nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04"
+        if use_gpu
+        else "python:3.10-slim"
+    )
+
+    if use_gpu:
+        # As imagens nvidia/cuda são Ubuntu runtime e não vêm com Python pronto
+        # como python:3.10-slim. Em Ubuntu 22.04, python3.10 é o Python padrão.
+        python_setup_block = textwrap.dedent("""\
+            RUN apt-get update && apt-get install -y --no-install-recommends \\
+                python3.10 \\
+                python3-pip \\
+                python3.10-dev \\
+             && ln -sf /usr/bin/python3.10 /usr/bin/python3 \\
+             && ln -sf /usr/bin/python3.10 /usr/bin/python \\
+             && rm -rf /var/lib/apt/lists/*
+
+            ENV PYTHONPATH=/usr/local/lib/python3.10/site-packages
+            ENV NVIDIA_VISIBLE_DEVICES=all
+            ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+            ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+        """).rstrip()
+    else:
+        python_setup_block = textwrap.dedent("""\
+            RUN ln -s /usr/local/bin/python3 /usr/bin/python3
+        """).rstrip()
 
     desired_labels = {
         "req.sha256": req_sha,
         "mininetfed.sha256": fed_sha,
         "exec.sha256": exec_sha,
         "build.tool": "docker-py",
+        "gpu.enabled": str(use_gpu).lower(),
     }
 
     client = docker.from_env()
 
     # Se imagem existe e labels batem -> skip
     if _image_labels_match(client, tag, desired_labels):
-        print(f"[skip] '{tag}' já está atualizada (req/core/executor sem mudanças).")
-        return {"tag": tag, "action": "skipped"}
+        print(f"[skip] '{tag}' já está atualizada (req/core/executor/gpu sem mudanças).")
+        return {"tag": tag, "action": "skipped", "gpu": use_gpu}
 
-    # Monta Dockerfile com blocos opcionais
     dockerfile = textwrap.dedent(f"""\
-        FROM python:3.10-slim
+        FROM {base_image}
         ENV DEBIAN_FRONTEND=noninteractive
 
-        RUN ln -s /usr/local/bin/python3 /usr/bin/python3
+        {python_setup_block}
 
         # ===== Labels de controle/idempotência =====
         LABEL req.sha256="{req_sha}"
         LABEL mininetfed.sha256="{fed_sha}"
         LABEL exec.sha256="{exec_sha}"
         LABEL build.tool="docker-py"
+        LABEL gpu.enabled="{str(use_gpu).lower()}"
 
         # pacotes de rede
         RUN apt-get update && apt-get install -y --no-install-recommends \\
@@ -297,17 +341,13 @@ if __name__ == "__main__":
     # Contexto de build: Dockerfile, (opcional) requirements, mininetfed, shim
     mem_tar = io.BytesIO()
     with tarfile.open(fileobj=mem_tar, mode="w") as tar:
-        # Dockerfile
         _add_bytes(tar, "Dockerfile", dockerfile.encode("utf-8"))
 
-        # requirements (se houver)
         if req_path is not None:
             _add_file(tar, req_path, "requirements.txt")
 
-        # mininetfed (pacote do host)
         _add_dir_recursive(tar, fed_pkg_dir, "fed_vendor/mininetfed")
 
-        # shim do executor
         _add_bytes(
             tar,
             "exec_vendor/mininetfed-node-executor",
@@ -318,8 +358,7 @@ if __name__ == "__main__":
     exists_before = _image_exists(client, tag)
     action = "rebuilt" if exists_before else "created"
 
-    low = client.api  # low-level client
-
+    low = client.api
     mem_tar.seek(0)
 
     print(f"[docker] Building image '{tag}'...")
@@ -349,9 +388,8 @@ if __name__ == "__main__":
         else:
             print(chunk)
 
-    print(f"\n[ok] Imagem '{tag}' {action}.")
-    return {"tag": tag, "action": action}
-
+    print(f"\n[ok] Imagem '{tag}' {action}. GPU={use_gpu}")
+    return {"tag": tag, "action": action, "gpu": use_gpu}
 
 
 def build_fed_broker_docker_image() -> dict:
@@ -403,7 +441,7 @@ if __name__ == "__main__":
             iproute2 \\
             curl \\
          && rm -rf /var/lib/apt/lists/*
-         
+
         RUN pip install --no-cache-dir numpy paho-mqtt
 
         # Copiar o pacote mininetfed do host para dentro da imagem
