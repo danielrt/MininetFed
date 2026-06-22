@@ -45,7 +45,7 @@ class FedServer(FedNode):
         self.current_round = 0
         self.agg_metrics_by_round : list[Metrics] = []
         self.best_metrics : Metrics | None = None
-        self.best_target_metric = 0.0
+        self.best_target_metric = -float("inf")
         self.target_metric_stop_value = 0.0
         self.target_metric = MetricType.ACCURACY
         self.model_aggregator = AggregatorType.FED_AVG
@@ -117,6 +117,50 @@ class FedServer(FedNode):
 
         self.logger.info(f"Learning curve CSV saved to {self.learning_curve_file}")
         print(f"Learning curve CSV saved to {self.learning_curve_file}")
+
+    def save_final_training_artifacts(self):
+        """
+        Salva os artefatos finais do treinamento.
+
+        Durante os rounds, apenas last.model é salvo continuamente.
+        Ao final, best.model e metrics_summary.txt são gravados uma única vez,
+        independentemente do motivo de parada: stop_value, early_stop ou max_rounds.
+        """
+        if self.last_model is not None:
+            save_weights(self.last_model_file, self.last_model.get_weights())
+            self.logger.info(f"Last model saved to {self.last_model_file}")
+            print(f"Last model saved to {self.last_model_file}")
+        else:
+            self.logger.warning("No last_model available to save.")
+            print(Color.YELLOW + "No last_model available to save." + Color.RESET)
+
+        if self.best_model is None:
+            if self.last_model is not None:
+                self.logger.warning("No best_model recorded. Falling back to last_model.")
+                print(Color.YELLOW + "No best_model recorded. Falling back to last_model." + Color.RESET)
+                self.best_model = self.last_model
+            else:
+                self.logger.warning("No best_model or last_model available to save.")
+                print(Color.YELLOW + "No best_model or last_model available to save." + Color.RESET)
+
+        if self.best_metrics is None:
+            if self.agg_metrics_by_round:
+                self.logger.warning("No best_metrics recorded. Falling back to last aggregated metrics.")
+                print(Color.YELLOW + "No best_metrics recorded. Falling back to last aggregated metrics." + Color.RESET)
+                self.best_metrics = self.agg_metrics_by_round[-1]
+            else:
+                self.logger.warning("No best_metrics available to save.")
+                print(Color.YELLOW + "No best_metrics available to save." + Color.RESET)
+
+        if self.best_model is not None:
+            save_weights(self.best_model_file, self.best_model.get_weights())
+            self.logger.info(f"Best model saved to {self.best_model_file}")
+            print(f"Best model saved to {self.best_model_file}")
+
+        if self.best_metrics is not None:
+            self.best_metrics.save_summary(self.metrics_summary_file)
+            self.logger.info(f"Best metrics saved to {self.metrics_summary_file}")
+            print(f"Best metrics saved to {self.metrics_summary_file}")
 
     def save_progress_json(
             self,
@@ -298,16 +342,10 @@ class FedServer(FedNode):
               f'{self.target_metric} on round {self.current_round} was {agg_target_metric}\n' +
               Color.RESET)
 
-        if agg_target_metric >= self.target_metric_stop_value:
-            self.stop_reason = "stop_value"
-            self.stop_reason_detail = (
-                f"{self.target_metric} reached stop value: "
-                f"{agg_target_metric} >= {self.target_metric_stop_value}"
-            )
-            print(Color.YELLOW + 'Stop condition by stop value was met' + Color.RESET)
-            return True
-
-        if agg_target_metric > self.best_target_metric:
+        # Primeiro atualiza o melhor modelo em memória.
+        # Isso garante que um round que alcança stop_value também possa ser salvo como best.
+        improved = agg_target_metric > self.best_target_metric
+        if improved:
             self.best_target_metric = agg_target_metric
             self.best_metrics = agg_metrics
             self.best_model = self.last_model
@@ -319,17 +357,27 @@ class FedServer(FedNode):
                   f'{self.no_improvement_counter}' +
                   Color.RESET)
 
-            if ServerOptions.PATIENT in self.server_args:
-                patient = self.server_args[ServerOptions.PATIENT]
-                if self.no_improvement_counter >= patient:
-                    self.stop_reason = "early_stop"
-                    self.stop_reason_detail = (
-                        f"Early stop triggered: no improvement for "
-                        f"{self.no_improvement_counter} rounds "
-                        f"(patience={patient})"
-                    )
-                    print(Color.YELLOW + 'Stop condition by early stop was met' + Color.RESET)
-                    return True
+        # Depois verifica os critérios de parada.
+        if agg_target_metric >= self.target_metric_stop_value:
+            self.stop_reason = "stop_value"
+            self.stop_reason_detail = (
+                f"{self.target_metric} reached stop value: "
+                f"{agg_target_metric} >= {self.target_metric_stop_value}"
+            )
+            print(Color.YELLOW + 'Stop condition by stop value was met' + Color.RESET)
+            return True
+
+        if not improved and ServerOptions.PATIENT in self.server_args:
+            patient = self.server_args[ServerOptions.PATIENT]
+            if self.no_improvement_counter >= patient:
+                self.stop_reason = "early_stop"
+                self.stop_reason_detail = (
+                    f"Early stop triggered: no improvement for "
+                    f"{self.no_improvement_counter} rounds "
+                    f"(patience={patient})"
+                )
+                print(Color.YELLOW + 'Stop condition by early stop was met' + Color.RESET)
+                return True
 
         return False
 
@@ -470,19 +518,6 @@ class FedServer(FedNode):
 
             self.spnfl_logger.info(f'T_SAVE_END')
 
-            if stop_fed:
-                self.spnfl_logger.info(f'T_SAVE_START')
-                # para o caso em que o modelo converge ja no round 0
-                if not self.best_model:
-                    self.best_model = self.last_model
-                    self.best_metrics = self.agg_metrics_by_round[self.current_round]
-                # TODO: salvar metadados do treinamento para poder fazer resume
-                #with open(self.best_model_file, "w", encoding="utf-8") as f:
-                #    f.write(self.best_model.to_json())
-                save_weights(self.best_model_file, self.best_model.get_weights())
-                self.best_metrics.save_summary(self.metrics_summary_file)
-                self.spnfl_logger.info(f'T_SAVE_END')
-
             # calcular tempo do round e estimar tempo restante
             round_end_time = time.time()
             round_duration = round_end_time - round_start_time
@@ -534,6 +569,10 @@ class FedServer(FedNode):
                 f"Maximum number of rounds reached: "
                 f"{self.current_round}/{self.num_rounds}"
             )
+
+        self.spnfl_logger.info(f'T_SAVE_START')
+        self.save_final_training_artifacts()
+        self.spnfl_logger.info(f'T_SAVE_END')
 
         last_duration = round_times[-1] if round_times else None
         avg_duration = (sum(round_times) / len(round_times)) if round_times else None
