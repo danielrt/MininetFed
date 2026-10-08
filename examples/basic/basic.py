@@ -66,7 +66,7 @@ def configure_experiment():
         net.addNAT(name='nat0', linkTo='s1', ip='192.168.210.254').configDefault()
         s1.start([])
 
-        net.runFed(show_term=True)
+        net.runFed(show_term=False)
     finally:
         # isso garante limpeza mesmo se der exceção no meio
         net.stop()
