@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 
 import numpy as np
 import pandas as pd
-from sklearn.datasets import fetch_openml
+from sklearn.datasets import fetch_openml, _openml
 
 
 DatasetSource = Union[str, pd.DataFrame]
@@ -52,7 +52,21 @@ def load_dataset_from_openml(
     if version is not None:
         kwargs["version"] = version
 
-    bunch = fetch_openml(**kwargs)
+    # Solicita o conteúdo sem compressão HTTP para evitar a resposta
+    # divergente observada no download do CIFAR-10.
+    # O scikit-learn continua responsável pelo cache e pela validação MD5.
+    original_urlopen = _openml.urlopen
+
+    def urlopen_without_compression(request, *args, **request_kwargs):
+        if hasattr(request, "add_header"):
+            request.add_header("Accept-Encoding", "identity")
+        return original_urlopen(request, *args, **request_kwargs)
+
+    _openml.urlopen = urlopen_without_compression
+    try:
+        bunch = fetch_openml(**kwargs)
+    finally:
+        _openml.urlopen = original_urlopen
 
     X = bunch.data.copy()
     y = bunch.target.copy()
